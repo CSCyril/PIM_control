@@ -125,7 +125,13 @@ function renderPM() {
       ${d.pm_rows.length > 1 ? `<span class="tag dup big">${d.pm_rows.length} lignes PM</span>` : ""}</h1>
     <div class="head-actions">
       ${d.has_pm ? "" : '<button id="btn-create-pm">＋ Créer la fiche PM</button>'}
+      <button id="btn-assistant">🤖 Assistant IA</button>
     </div>`;
+  const ba = $("#btn-assistant");
+  if (ba) ba.addEventListener("click", () => {
+    const p = $("#assistant-panel");
+    p.style.display = p.style.display === "none" ? "block" : "none";
+  });
   const bcp = $("#btn-create-pm");
   if (bcp) bcp.addEventListener("click", async () => {
     await api("/api/pm", {method: "POST", headers: {"Content-Type": "application/json"},
@@ -148,15 +154,23 @@ function renderPM() {
     fields.innerHTML = `<div class="card"><h3>Attributs du PM (ligne ${row.row})</h3>
       <div class="grid">` + STATE.pm_hdr.map(h => {
         const m = STATE.refs && STATE.refs.col_meta[h];
+        const lbl = m && m.label ? esc(m.label) + ' <small>' + esc(h) + '</small>' : esc(h);
+        if (m && m.type === "textarea") {
+          return `
+        <div class="field wide">
+          <label>${lbl}</label>
+          <textarea rows="5" data-pm-row="${row.row}" data-field="${esc(h)}">${esc(fmt(row.values[h]))}</textarea>
+        </div>`;
+        }
         return `
         <div class="field">
-          <label>${m && m.label ? esc(m.label) + ' <small>' + esc(h) + '</small>' : esc(h)}</label>
+          <label>${lbl}</label>
           <input data-pm-row="${row.row}" data-field="${esc(h)}" list="dl-pm-${esc(h)}"
                  value="${esc(fmt(row.values[h]))}">
         </div>`; }).join("") + `</div>
       <div class="row-actions"><button id="btn-del-pm-row" class="danger">🗑 Supprimer cette ligne PM</button></div>
       </div>`;
-    fields.querySelectorAll("input").forEach(inp => {
+    fields.querySelectorAll("input, textarea").forEach(inp => {
       inp.addEventListener("change", async () => {
         await api("/api/pm/row/" + inp.dataset.pmRow, {method: "PUT",
           headers: {"Content-Type": "application/json"},
@@ -262,10 +276,17 @@ function startEdit(td) {
   editCell = td;
   const isParent = field === "parent";
   const dlId = isParent ? "dl-parent" : ("dl-pr-" + field);
+  const meta = STATE.refs && STATE.refs.col_meta[field];
+  const longText = !isParent && meta && (meta.type === "textarea" || (meta.type === "text" && old.length > 60));
   td.classList.add("editing");
-  td.innerHTML = `<input list="${document.getElementById(dlId) ? dlId : ""}" value="${esc(old === "—" ? "" : old)}">`;
-  const inp = td.querySelector("input");
-  inp.focus(); inp.select();
+  if (longText) {
+    td.innerHTML = `<textarea rows="5">${esc(old === "—" ? "" : old)}</textarea>`;
+  } else {
+    td.innerHTML = `<input list="${document.getElementById(dlId) ? dlId : ""}" value="${esc(old === "—" ? "" : old)}">`;
+  }
+  const inp = td.querySelector("input, textarea");
+  inp.focus();
+  if (inp.select) inp.select();
   let done = false;
   const finish = async (saveIt) => {
     if (done) return; done = true;
@@ -287,7 +308,8 @@ function startEdit(td) {
   };
   inp.addEventListener("blur", () => finish(true));
   inp.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    if (e.key === "Enter" && !longText) { e.preventDefault(); finish(true); }
+    if (e.key === "Enter" && e.ctrlKey && longText) { e.preventDefault(); finish(true); }
     if (e.key === "Escape") { e.preventDefault(); finish(false); }
   });
 }
@@ -364,3 +386,65 @@ loadState().then(() => {
   if (saved && STATE.pm_list.some(p => p.code === saved)) openPM(saved);
 });
 setInterval(() => { if (currentCode) sessionStorage.setItem("lastPM", currentCode); }, 2000);
+
+// ---------- Assistant IA ----------
+let LAST_PATCH = [];
+
+async function sendAssistant() {
+  const msg = $("#ai-msg").value.trim();
+  if (!msg || !currentCode) return;
+  $("#ai-status").textContent = "Envoi…";
+  try {
+    const r = await api("/api/assistant", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({pm: currentCode, message: msg})});
+    $("#ai-status").textContent = r.mode === "api"
+      ? "Réponse reçue via API (" + (r.model || "LLM") + ")"
+      : (r.note || "mode manuel");
+    if (r.mode === "manuel" && r.prompt) {
+      $("#ai-prompt").value = r.prompt;
+      $("#ai-prompt-wrap").style.display = "block";
+    }
+    LAST_PATCH = r.patch || [];
+    renderAIResponse(r.explication || "", LAST_PATCH);
+  } catch (e) {
+    $("#ai-status").textContent = "Erreur : " + e.message;
+  }
+}
+
+async function previewAnswer() {
+  let obj;
+  try { obj = JSON.parse($("#ai-answer").value); }
+  catch (e) { alert("JSON invalide : " + e.message); return; }
+  const patch = Array.isArray(obj.patch) ? obj.patch : [];
+  const r = await api("/api/assistant/preview", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({patch})});
+  LAST_PATCH = r.patch;
+  $("#ai-prompt-wrap").style.display = "none";
+  renderAIResponse(obj.explication || "", r.patch);
+}
+
+function renderAIResponse(expl, patch) {
+  $("#ai-explication").textContent = expl;
+  $("#ai-patch tbody").innerHTML = patch.map((p, i) => `<tr>
+    <td><input type="checkbox" checked data-i="${i}"></td>
+    <td>${esc(p.sheet)}</td><td>${p.row}</td><td>${esc(p.field)}</td>
+    <td class="old">${esc(fmt(p.old))}</td><td class="new">${esc(fmt(p.value))}</td></tr>`).join("");
+  $("#ai-response").style.display = "block";
+}
+
+async function applyPatch() {
+  const sel = [...document.querySelectorAll("#ai-patch input[type=checkbox]:checked")]
+    .map(c => LAST_PATCH[+c.dataset.i]).filter(Boolean);
+  if (!sel.length) { $("#ai-apply-status").textContent = "Aucune modification cochée."; return; }
+  const r = await api("/api/assistant/apply", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({patch: sel})});
+  $("#ai-apply-status").textContent = r.applied.length + " modification(s) appliquée(s)"
+    + (r.errors.length ? ", " + r.errors.length + " rejetée(s)" : "")
+    + (r.saved_at ? " — 💾 enregistré à " + r.saved_at : "");
+  await afterMutation();
+}
+
+$("#ai-send").addEventListener("click", sendAssistant);
+$("#ai-copy").addEventListener("click", () => { const t = $("#ai-prompt"); t.select(); document.execCommand("copy"); $("#ai-status").textContent = "Prompt copié 📋"; });
+$("#ai-preview").addEventListener("click", previewAnswer);
+$("#ai-apply").addEventListener("click", applyPatch);

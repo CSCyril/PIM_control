@@ -39,6 +39,26 @@
       <div id="pm-tabs"></div>
       <div id="pm-fields"></div>
       <div id="pm-checks"></div>
+      <div id="assistant-panel" class="card" style="display:none">
+        <h3>🤖 Assistant IA — modifier ce PM / ses produits</h3>
+        <p class="hint">Décrivez la modification souhaitée. L'assistant reçoit le contexte complet
+        (fiche PM, produits liés, contrôles, dictionnaire d'options) et propose un patch JSON
+        appliquable cellule par cellule. Sans clé API configurée, un prompt copiable est généré.</p>
+        <textarea id="ai-msg" rows="3" placeholder="Ex. : raccourcis le nom du PM, corrige la description longue, harmonise les titres des produits avec la gamme, remplis la taille manquante…"></textarea>
+        <div class="row-actions"><button id="ai-send">Envoyer à l'IA</button> <span id="ai-status" class="hint"></span></div>
+        <div id="ai-prompt-wrap" style="display:none">
+          <label>Prompt à copier (aucune clé API — collez-le à votre IA, puis collez sa réponse JSON ci-dessous) :</label>
+          <textarea id="ai-prompt" rows="8" readonly></textarea>
+          <div class="row-actions"><button id="ai-copy">📋 Copier le prompt</button></div>
+          <textarea id="ai-answer" rows="6" placeholder='Réponse JSON de l\'IA : {"explication": "...", "patch": [{"sheet":"PM","row":2,"field":"EUMKG0120-fr_FR","value":"..."}]}'></textarea>
+          <div class="row-actions"><button id="ai-preview">Prévisualiser la réponse</button></div>
+        </div>
+        <div id="ai-response" style="display:none">
+          <div id="ai-explication"></div>
+          <table id="ai-patch"><thead><tr><th></th><th>feuille</th><th>ligne</th><th>champ</th><th>ancienne valeur</th><th>nouvelle valeur</th></tr></thead><tbody></tbody></table>
+          <div class="row-actions"><button id="ai-apply">✅ Appliquer les modifications cochées</button> <span id="ai-apply-status" class="hint"></span></div>
+        </div>
+      </div>
       <div id="products-head">
         <h2>Produits liés <span id="prod-count"></span></h2>
         <button id="btn-add-product">＋ Ajouter un produit</button>

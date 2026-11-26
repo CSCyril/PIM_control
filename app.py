@@ -1,8 +1,10 @@
 import os
 import re
+import json
 import shutil
 import threading
 import datetime
+import urllib.request as urlreq
 from collections import Counter, defaultdict
 
 from flask import Flask, jsonify, request, render_template, send_file
@@ -732,6 +734,137 @@ def api_export():
         save()
     return send_file(XLSX, as_attachment=True,
                      download_name=os.path.basename(XLSX).replace(".xlsx", "_controle.xlsx"))
+
+
+# ---------- Assistant IA ----------
+LLM_API_URL = os.environ.get("LLM_API_URL", "https://api.mistral.ai/v1/chat/completions")
+LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
+LLM_MODEL = os.environ.get("LLM_MODEL", "mistral-large-latest")
+
+SYSTEM_PROMPT = (
+    "Tu es un assistant expert du PIM Akeneo. On te donne le contexte complet d'un PM "
+    "(fiche PM, produits liés avec leurs attributs et contrôles de cohérence, métadonnées des "
+    "colonnes issues du dictionnaire Akeneo : libellé, type, options valides).\n"
+    "L'utilisateur te demande de modifier ce PM et/ou ses produits.\n"
+    "Réponds UNIQUEMENT avec un objet JSON (aucun texte avant/après) :\n"
+    "{\n"
+    "  \"explication\": \"résumé en français des modifications proposées\",\n"
+    "  \"patch\": [ {\"sheet\": \"PM\" ou \"produits\", \"row\": <numéro de ligne Excel>, "
+    "\"field\": \"<nom de colonne exact>\", \"value\": <nouvelle valeur>} ]\n"
+    "}\n"
+    "Règles : n'utilise que des feuilles, numéros de ligne et colonnes présents dans le contexte ; "
+    "pour un attribut à options, value doit être un code d'option fourni dans le contexte "
+    "(ou null pour vider) ; value null = vider la cellule ; ne modifie que ce qui est demandé."
+)
+
+
+def assistant_context(code):
+    with lock:
+        d = pm_detail(code)
+        meta = {}
+        for col, m in col_meta.items():
+            if not m:
+                continue
+            mm = {k: m[k] for k in ("code", "label", "type", "group_label") if k in m}
+            if "options" in m:
+                items = list(m["options"].items())
+                mm["options"] = dict(items[:80])
+                if len(items) > 80:
+                    mm["options_note"] = "liste tronquée, %d options au total" % len(items)
+            meta[col] = mm
+        return {
+            "pm": d,
+            "colonnes": meta,
+            "labels_controles": LABELS,
+            "familles": {k: v["label"] for k, v in families.items()},
+        }
+
+
+def enrich_patch(patch):
+    out = []
+    with lock:
+        for it in patch:
+            sheet, row, field = it.get("sheet"), it.get("row"), it.get("field")
+            ws = pm_ws if sheet == "PM" else pr_ws if sheet == "produits" else None
+            colmap = pm_col if sheet == "PM" else pr_col
+            old = None
+            if ws is not None and isinstance(row, int) and field in colmap and 2 <= row <= ws.max_row:
+                old = ws.cell(row=row, column=colmap[field]).value
+            out.append({"sheet": sheet, "row": row, "field": field,
+                        "value": it.get("value"), "old": old})
+    return out
+
+
+@app.route("/api/assistant", methods=["POST"])
+def api_assistant():
+    data = request.get_json(force=True)
+    code = s(data.get("pm"))
+    message = s(data.get("message"))
+    ctx = assistant_context(code)
+    user_prompt = ("CONTEXTE (PM %s) :\n```json\n%s\n```\n\nDEMANDE :\n%s\n\n"
+                   "Réponds UNIQUEMENT avec le JSON demandé." % (
+                       code, json.dumps(ctx, ensure_ascii=False)[:150000], message))
+    if LLM_API_KEY:
+        try:
+            req = urlreq.Request(LLM_API_URL, data=json.dumps({
+                "model": LLM_MODEL,
+                "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                             {"role": "user", "content": user_prompt}],
+                "temperature": 0.2,
+            }).encode(), headers={"Content-Type": "application/json",
+                                 "Authorization": "Bearer " + LLM_API_KEY})
+            with urlreq.urlopen(req, timeout=120) as resp:
+                out = json.loads(resp.read())
+            content = out["choices"][0]["message"]["content"]
+            m = re.search(r"\{.*\}", content, re.S)
+            ai = json.loads(m.group(0)) if m else {}
+            return jsonify({"mode": "api", "model": LLM_MODEL,
+                            "explication": ai.get("explication", ""),
+                            "patch": enrich_patch(ai.get("patch", []))})
+        except Exception as e:
+            return jsonify({"mode": "manuel",
+                            "note": "Appel API indisponible (%s) — utilisation du mode manuel." % type(e).__name__,
+                            "prompt": SYSTEM_PROMPT + "\n\n" + user_prompt})
+    return jsonify({"mode": "manuel",
+                    "note": "Aucune clé API configurée (LLM_API_KEY) — mode manuel : copiez le prompt, "
+                            "envoyez-le à votre IA, puis collez sa réponse JSON.",
+                    "prompt": SYSTEM_PROMPT + "\n\n" + user_prompt})
+
+
+@app.route("/api/assistant/preview", methods=["POST"])
+def api_assistant_preview():
+    data = request.get_json(force=True)
+    patch = data.get("patch", [])
+    if not isinstance(patch, list):
+        return jsonify({"error": "patch doit être une liste"}), 400
+    return jsonify({"patch": enrich_patch(patch)})
+
+
+@app.route("/api/assistant/apply", methods=["POST"])
+def api_assistant_apply():
+    data = request.get_json(force=True)
+    patch = data.get("patch", [])
+    if not isinstance(patch, list):
+        return jsonify({"error": "patch doit être une liste"}), 400
+    applied, errors = [], []
+    with lock:
+        for it in patch:
+            sheet, row, field, value = it.get("sheet"), it.get("row"), it.get("field"), it.get("value")
+            ws = pm_ws if sheet == "PM" else pr_ws if sheet == "produits" else None
+            colmap = pm_col if sheet == "PM" else pr_col
+            if (ws is None or not isinstance(row, int) or field not in colmap
+                    or row < 2 or row > ws.max_row):
+                errors.append({"item": it, "error": "feuille/ligne/champ invalide"})
+                continue
+            old = ws.cell(row=row, column=colmap[field]).value
+            new = parse_value(value)
+            ws.cell(row=row, column=colmap[field]).value = new
+            applied.append({"sheet": sheet, "row": row, "field": field,
+                            "old": old, "new": new})
+        if applied:
+            scan()
+            save()
+    return jsonify({"applied": applied, "errors": errors, "saved_at": last_saved})
 
 
 scan()

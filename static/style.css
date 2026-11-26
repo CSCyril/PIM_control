@@ -46,6 +46,20 @@ body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; font-size: 13px; c
 .field label { display: block; font-size: 11px; color: #667; font-family: Consolas, monospace; }
 .field input { width: 100%; padding: 5px 8px; border: 1px solid #c6cfd9; border-radius: 5px; font-size: 13px; }
 .field input:focus { outline: 2px solid #7fb3e0; border-color: #7fb3e0; }
+.field.wide { grid-column: span 2; }
+.field textarea, #assistant-panel textarea { width: 100%; padding: 7px 9px; border: 1px solid #c6cfd9; border-radius: 6px; font-size: 13px; font-family: inherit; resize: vertical; }
+.field textarea:focus, #assistant-panel textarea:focus { outline: 2px solid #7fb3e0; border-color: #7fb3e0; }
+#products-table td.editing textarea { width: 100%; min-width: 320px; border: none; padding: 5px 8px; font-size: 12px; font-family: inherit; outline: 2px solid #2a5a86; resize: vertical; }
+.hint { color: #778; font-size: 12px; }
+#assistant-panel h3 { margin-top: 0; }
+#ai-msg { margin: 6px 0; }
+#ai-prompt-wrap { margin-top: 10px; border-top: 1px dashed #d8dee6; padding-top: 8px; }
+#ai-prompt, #ai-answer { background: #f7f9fc; font-family: Consolas, monospace; font-size: 11px; }
+#ai-explication { background: #eef4fb; border-left: 3px solid #2a5a86; padding: 8px 10px; border-radius: 4px; margin: 8px 0; white-space: pre-wrap; }
+#ai-patch { border-collapse: collapse; margin: 8px 0; max-width: 100%; }
+#ai-patch th, #ai-patch td { border: 1px solid #d8dee6; padding: 4px 8px; font-size: 12px; text-align: left; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ai-patch td.old { color: #a33; }
+#ai-patch td.new { color: #1c6b2f; font-weight: 600; }
 .row-actions { margin-top: 10px; }
 
 button.danger { background: #fff; border: 1px solid #c0392b; color: #c0392b; border-radius: 6px; padding: 5px 10px; cursor: pointer; }

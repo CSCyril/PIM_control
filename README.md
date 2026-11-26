@@ -75,6 +75,31 @@ l'autocomplétion retombe sur les valeurs distinctes présentes dans le fichier 
 Un fichier `refs/*ADDENDUM*.xlsx` (feuilles `VARIANTS` et/ou `FAMILIES`) est fusionné en
 priorité : il sert à déclarer localement FAM007 et les `family_variant` observés dans le PIM.
 
+## Champs description élargis
+
+Dans la fiche PM, les attributs de type `textarea` du dictionnaire (ex. `EUMKG0030-fr_FR`
+description courte, `EUMKG0040-fr_FR` description longue) s'affichent en **grandes zones de
+texte** (5 lignes, pleine largeur sur 2 colonnes). Dans le tableau produits, un clic sur une
+cellule texte/textarea longue ouvre aussi une zone de texte multi-lignes (Ctrl+Entrée pour
+enregistrer, Échap pour annuler).
+
+## Assistant IA par PM
+
+Bouton **🤖 Assistant IA** sur chaque fiche PM : décrivez la modification souhaitée en français
+(ex. « raccourcis le nom du PM et harmonise les descriptions »). L'assistant reçoit le contexte
+complet (fiche PM, produits liés + contrôles, métadonnées des colonnes et options du dictionnaire)
+et renvoie un **patch JSON** prévisualisable (tableau ancienne → nouvelle valeur, cases à cocher)
+puis appliquable en un clic — chaque modification est validée (feuille/ligne/colonne existante)
+et **enregistrée dans le xlsx**.
+
+Deux modes :
+- **API directe** : définissez `LLM_API_KEY` (et éventuellement `LLM_API_URL`, `LLM_MODEL`,
+  défaut Mistral `https://api.mistral.ai/v1/chat/completions` / `mistral-large-latest`).
+  La clé reste côté serveur, jamais affichée ni journalisée.
+- **Mode manuel (hors-ligne)** : sans clé, l'interface génère le prompt complet copiable ;
+  collez-le à n'importe quelle IA, puis collez sa réponse JSON dans le panneau pour
+  prévisualiser et appliquer le patch.
+
 ## Relecture / correction automatique (`tools/`, `exports/`)
 
 - `python3 tools/corriger_pim.py <source.xlsx> refs exports` : applique les corrections sûres
