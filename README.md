@@ -72,6 +72,22 @@ Le dossier `refs/` contient les exports du dictionnaire Akeneo (10 fichiers `.xl
 Sans `refs/` (ou avec `REFS_DIR=/autre/dossier`), l'outil fonctionne comme avant :
 l'autocomplétion retombe sur les valeurs distinctes présentes dans le fichier PIM.
 
+Un fichier `refs/*ADDENDUM*.xlsx` (feuilles `VARIANTS` et/ou `FAMILIES`) est fusionné en
+priorité : il sert à déclarer localement FAM007 et les `family_variant` observés dans le PIM.
+
+## Relecture / correction automatique (`tools/`, `exports/`)
+
+- `python3 tools/corriger_pim.py <source.xlsx> refs exports` : applique les corrections sûres
+  (dédoublonnage des lignes PM et des SKU, création des fiches PM des parents orphelins,
+  alignement catégories/familles produit ↔ PM, remplissage des champs obligatoires
+  EUMKG0120/EUMKG0160/EUMKG0130, marque EUINF0010 et Type/Application déduits du nom,
+  normalisation libellé→code des options, coloris EUINF0233 retrouvés dans les noms,
+  EUFIL130 : Ø du texte → option de plage + unité) et produit :
+  `exports/pim_source_pour_controle_CORRIGE.xlsx`, `exports/variants_propositions.csv`
+  (analyse PM par PM des axes de variante + proposition), `exports/fixlog.json` (journal détaillé).
+- `python3 tools/rapport.py exports/fixlog.json exports/variants_propositions.csv <checks_avant.json> <checks_apres.json> exports/RAPPORT_CONTROLE.md`
+  : génère le rapport de contrôle (bilan avant/après + analyse approfondie des variantes).
+
 ## Structure du fichier attendu
 
 - Feuille `PM` : `code`, `family_variant`, `categories`, + attributs (ex. `EUINF0010`…).

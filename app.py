@@ -217,6 +217,44 @@ def load_refs():
                 if pi is not None and pi < len(r) and r[pi]:
                     sku_prefixes.append(str(r[pi]).strip())
 
+    if os.path.isdir(REFS_DIR):
+        for f in sorted(os.listdir(REFS_DIR)):
+            if "addendum" in f.lower() and f.lower().endswith(".xlsx"):
+                w = openpyxl.load_workbook(os.path.join(REFS_DIR, f), read_only=True, data_only=True)
+                if "VARIANTS" in w.sheetnames:
+                    rows = [list(r) for r in w["VARIANTS"].iter_rows(values_only=True)]
+                    hi = _header_idx(rows, "variant original", max_scan=5) or 0
+                    hdr = rows[hi]
+                    fi = _col(hdr, "Variant 1 FAM")
+                    axes_cols = [i for i, h in enumerate(hdr)
+                                 if h and re.fullmatch(r"variant \d+", str(h).strip().lower())]
+                    for r in rows[hi + 1:]:
+                        v = _lab(hdr, r, "variant original")
+                        if not v:
+                            continue
+                        fam = str(r[fi]).strip() if fi is not None and fi < len(r) and r[fi] else None
+                        axes = [str(r[i]).strip() for i in axes_cols if i < len(r) and r[i]]
+                        variants[v] = {"family": fam, "axes": axes}
+                if "FAMILIES" in w.sheetnames:
+                    rows = [list(r) for r in w["FAMILIES"].iter_rows(values_only=True)]
+                    hi = _header_idx(rows, "code")
+                    if hi is not None:
+                        hdr = rows[hi]
+                        ai = _col(hdr, "attributes")
+                        mi = _col(hdr, "requirements")
+                        for r in rows[hi + 1:]:
+                            c = _lab(hdr, r, "code")
+                            if not c:
+                                continue
+                            attrs, mand = set(), set()
+                            if ai is not None and ai < len(r) and r[ai]:
+                                attrs = {x.strip() for x in str(r[ai]).replace(";", ",").split(",") if x.strip()}
+                            if mi is not None and mi < len(r) and r[mi]:
+                                mand = {x.strip() for x in str(r[mi]).replace(";", ",").split(",") if x.strip()}
+                            families[c] = {"label": _lab(hdr, r, "label-fr_FR", "label-en_US") or c,
+                                           "attributes": sorted(attrs), "mandatory": sorted(mand)}
+                w.close()
+
     refs_loaded = bool(attributes or attr_options or categories or families or variants)
 
     col_meta = {}
