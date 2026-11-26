@@ -30,6 +30,214 @@ backup = os.path.join(DATA_DIR, "sauvegarde_%s_%s" % (
 if not os.path.exists(backup):
     shutil.copy(XLSX, backup)
 
+REFS_DIR = os.environ.get("REFS_DIR") or os.path.join(BASE, "refs")
+
+attributes = {}
+attr_options = {}
+categories = {}
+families = {}
+variants = {}
+attr_groups = {}
+attr_types = {}
+sku_prefixes = []
+refs_loaded = False
+col_meta = {}
+unknown_columns = []
+
+
+def _find_ref(name_part):
+    if not os.path.isdir(REFS_DIR):
+        return None
+    for f in sorted(os.listdir(REFS_DIR)):
+        if f.lower().endswith(".xlsx") and name_part.lower() in f.lower():
+            return os.path.join(REFS_DIR, f)
+    return None
+
+
+def _sheet_rows(path, sheet_name=None):
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    if sheet_name and sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+    else:
+        ws = wb.worksheets[0]
+    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    wb.close()
+    return rows
+
+
+def _header_idx(rows, key="code", max_scan=15):
+    for i, r in enumerate(rows[:max_scan]):
+        for c in r:
+            if c and str(c).strip().lower() == key.lower():
+                return i
+    return None
+
+
+def _col(hdr, *names):
+    for n in names:
+        for i, h in enumerate(hdr):
+            if h and str(h).strip().lower() == n.lower():
+                return i
+    for n in names:
+        for i, h in enumerate(hdr):
+            if h and str(h).strip().lower().startswith(n.lower()):
+                return i
+    return None
+
+
+def _lab(hdr, row, *names):
+    i = _col(hdr, *names)
+    if i is None or i >= len(row) or row[i] in (None, ""):
+        return None
+    return str(row[i]).strip()
+
+
+def attr_code_of(col):
+    if not col or not isinstance(col, str):
+        return None
+    return col.split("-")[0]
+
+
+def load_refs():
+    global attributes, attr_options, categories, families, variants
+    global attr_groups, attr_types, sku_prefixes, refs_loaded, col_meta, unknown_columns
+    attributes, attr_options, categories, families, variants = {}, {}, {}, {}, {}
+    attr_groups, attr_types, sku_prefixes = {}, {}, []
+
+    p = _find_ref("DICTIONARY ATTRIBUTES")
+    if p:
+        rows = _sheet_rows(p, "edited")
+        hi = _header_idx(rows)
+        if hi is not None:
+            hdr = rows[hi]
+            for r in rows[hi + 1:]:
+                code = _lab(hdr, r, "code")
+                if not code:
+                    continue
+                attributes[code] = {
+                    "label": _lab(hdr, r, "label") or code,
+                    "type": _lab(hdr, r, "type"),
+                    "group": _lab(hdr, r, "PARENT CODE"),
+                    "level": _lab(hdr, r, "managed"),
+                    "definition": _lab(hdr, r, "definition"),
+                }
+
+    p = _find_ref("ATTRIBUTE OPTIONS")
+    if p:
+        rows = _sheet_rows(p, "EXPORT")
+        hi = _header_idx(rows)
+        if hi is not None:
+            hdr = rows[hi]
+            for r in rows[hi + 1:]:
+                a = _lab(hdr, r, "attribute")
+                c = _lab(hdr, r, "code")
+                if not a or not c:
+                    continue
+                attr_options.setdefault(a, {})[c] = _lab(hdr, r, "label-fr_FR", "label-en_SOP", "label-en_US") or c
+
+    p = _find_ref("DICTIONARY CATEGORIES")
+    if p:
+        rows = _sheet_rows(p)
+        hi = _header_idx(rows)
+        if hi is not None:
+            hdr = rows[hi]
+            for r in rows[hi + 1:]:
+                c = _lab(hdr, r, "code")
+                if c:
+                    categories[c] = _lab(hdr, r, "label-fr_FR", "label-en_SOP", "label-en_US") or c
+
+    p = _find_ref("DICTIONARY FAMILIES")
+    if p:
+        rows = _sheet_rows(p)
+        hi = _header_idx(rows)
+        if hi is not None:
+            hdr = rows[hi]
+            ai = _col(hdr, "attributes")
+            mi = _col(hdr, "requirements")
+            for r in rows[hi + 1:]:
+                c = _lab(hdr, r, "code")
+                if not c:
+                    continue
+                attrs, mand = set(), set()
+                if ai is not None and ai < len(r) and r[ai]:
+                    attrs = {x.strip() for x in str(r[ai]).replace(";", ",").split(",") if x.strip()}
+                if mi is not None and mi < len(r) and r[mi]:
+                    mand = {x.strip() for x in str(r[mi]).replace(";", ",").split(",") if x.strip()}
+                families[c] = {"label": _lab(hdr, r, "label-fr_FR", "label-en_SOP") or c,
+                               "attributes": sorted(attrs), "mandatory": sorted(mand)}
+
+    p = _find_ref("LINKINGTABLE") or _find_ref("FAMILIE VARIANTS")
+    if p:
+        rows = _sheet_rows(p)
+        hi = _header_idx(rows, "variant original", max_scan=5)
+        if hi is None:
+            hi = 0
+        hdr = rows[hi]
+        fi = _col(hdr, "Variant 1 FAM")
+        axes_cols = [i for i, h in enumerate(hdr)
+                     if h and re.fullmatch(r"variant \d+", str(h).strip().lower())]
+        for r in rows[hi + 1:]:
+            v = _lab(hdr, r, "variant original")
+            if not v:
+                continue
+            fam = str(r[fi]).strip() if fi is not None and fi < len(r) and r[fi] else None
+            axes = [str(r[i]).strip() for i in axes_cols if i < len(r) and r[i]]
+            variants[v] = {"family": fam, "axes": axes}
+
+    p = _find_ref("ATTRIBUTE GROUPS")
+    if p:
+        rows = _sheet_rows(p, "EXPORT")
+        hi = _header_idx(rows)
+        if hi is not None:
+            hdr = rows[hi]
+            for r in rows[hi + 1:]:
+                c = _lab(hdr, r, "code")
+                if c:
+                    attr_groups[c] = _lab(hdr, r, "label-fr_FR", "label-en_US") or c
+
+    p = _find_ref("ATTRIBUTE TYPES")
+    if p:
+        rows = _sheet_rows(p)
+        hi = _header_idx(rows, "type")
+        if hi is not None:
+            hdr = rows[hi]
+            for r in rows[hi + 1:]:
+                t = _lab(hdr, r, "type")
+                if t:
+                    attr_types[t] = _lab(hdr, r, "description") or ""
+
+    p = _find_ref("PREFIXES")
+    if p:
+        rows = _sheet_rows(p)
+        hi = _header_idx(rows, "subject")
+        if hi is not None:
+            hdr = rows[hi]
+            pi = _col(hdr, "prefix")
+            for r in rows[hi + 1:]:
+                if pi is not None and pi < len(r) and r[pi]:
+                    sku_prefixes.append(str(r[pi]).strip())
+
+    refs_loaded = bool(attributes or attr_options or categories or families or variants)
+
+    col_meta = {}
+    unknown_columns = []
+    fixed = {"sku", "categories", "enabled", "family", "parent", "code", "family_variant"}
+    for col in list(pr_hdr) + list(pm_hdr):
+        base = attr_code_of(col)
+        meta = None
+        if base and base in attributes:
+            a = attributes[base]
+            meta = {"code": base, "label": a["label"], "type": a["type"], "group": a["group"],
+                    "group_label": attr_groups.get(a["group"]) if a["group"] else None,
+                    "is_unit": isinstance(col, str) and col.endswith("-unit"),
+                    "is_locale": isinstance(col, str) and "-" in col and not col.endswith("-unit")}
+            if base in attr_options:
+                meta["options"] = attr_options[base]
+        col_meta[col] = meta
+        if base and col not in fixed and base not in attributes:
+            unknown_columns.append(col)
+
+
 app = Flask(__name__)
 lock = threading.Lock()
 
@@ -74,6 +282,10 @@ LABELS = {
     "champ_obligatoire_vide": "Champ obligatoire vide",
     "categorie_diff_pm": "Catégories du produit différentes de celles du PM",
     "famille_diff_pm": "Famille du produit différente de la famille du PM",
+    "option_invalide": "Valeur d'option inconnue du dictionnaire Akeneo",
+    "famille_inconnue": "Famille non déclarée dans le dictionnaire des familles",
+    "family_variant_non_reference": "family_variant absent de la LINKINGTABLE Akeneo",
+    "attribut_inconnu": "Colonne du fichier PIM sans attribut correspondant dans le dictionnaire",
 }
 
 
@@ -169,6 +381,22 @@ def product_checks_for(vals):
         if not s(vals.get(m)):
             checks.append({"type": "champ_obligatoire_vide", "severity": "warning",
                            "msg": "Champ obligatoire vide : %s" % m})
+    famv = s(vals.get("family"))
+    if famv and families and famv not in families:
+        checks.append({"type": "famille_inconnue", "severity": "info",
+                       "msg": "Famille « %s » non déclarée dans le dictionnaire des familles" % famv})
+    for col in pr_hdr:
+        if not isinstance(col, str) or col in ("sku", "categories", "enabled", "family", "parent") or col.endswith("-unit"):
+            continue
+        base = attr_code_of(col)
+        opts = attr_options.get(base)
+        v = s(vals.get(col))
+        if opts and v:
+            bad = [t.strip() for t in v.split(",") if t.strip() and t.strip() not in opts]
+            if bad:
+                checks.append({"type": "option_invalide", "severity": "warning",
+                               "msg": "%s : valeur(s) hors dictionnaire : %s (attendu %s_OPTIONxxxx)"
+                                      % (col, ", ".join(bad[:3]), base)})
     if parent in pm_by_code:
         pmrow = next(e for e in pm_rows if e["row"] == pm_by_code[parent][0])
         pmc = s(pmrow["values"].get("categories"))
@@ -216,14 +444,35 @@ def compute_checks():
                 checks.append({"type": "pm_categorie_mismatch", "severity": "warning",
                                "msg": "%d produit(s) avec catégories ≠ PM : %s"
                                       % (len(cat_bad), ", ".join(cat_bad[:8]))})
-            fam = s(first.get("family_variant")).split("_")[0]
+            fv = s(first.get("family_variant"))
+            entry = variants.get(fv) if fv else None
+            if fv and not entry:
+                checks.append({"type": "family_variant_non_reference", "severity": "warning",
+                               "msg": "family_variant « %s » absent de la LINKINGTABLE (axes déduits du nom)" % fv})
+            if entry:
+                fam = entry.get("family") or fv.split("_")[0]
+                axes = [a for a in entry.get("axes", []) if a in pr_col]
+            else:
+                fam = fv.split("_")[0] if fv else ""
+                axes = [a for a in fv.split("_")[1:] if a in pr_col] if fv else []
             fam_bad = [s(p["values"].get("sku")) for p in prods
                        if fam and s(p["values"].get("family")) and s(p["values"].get("family")) != fam]
             if fam_bad:
                 checks.append({"type": "pm_famille_mismatch", "severity": "warning",
                                "msg": "%d produit(s) avec famille ≠ PM (%s) : %s"
                                       % (len(fam_bad), fam, ", ".join(fam_bad[:8]))})
-            axes = [a for a in s(first.get("family_variant")).split("_")[1:] if a in pr_col]
+            for col in pm_hdr:
+                if not isinstance(col, str) or col in ("code", "family_variant", "categories"):
+                    continue
+                base = attr_code_of(col)
+                opts = attr_options.get(base)
+                v = s(first.get(col))
+                if opts and v:
+                    bad = [t.strip() for t in v.split(",") if t.strip() and t.strip() not in opts]
+                    if bad:
+                        checks.append({"type": "option_invalide", "severity": "warning",
+                                       "msg": "%s : valeur(s) hors dictionnaire : %s (attendu %s_OPTIONxxxx)"
+                                              % (col, ", ".join(bad[:3]), base)})
             if axes:
                 missing = [s(p["values"].get("sku")) for p in prods
                            if any(not s(p["values"].get(a)) for a in axes)]
@@ -300,6 +549,24 @@ def api_state():
             "last_saved": last_saved,
             "file": os.path.basename(XLSX),
             "backup": os.path.basename(backup),
+            "refs": {
+                "loaded": refs_loaded,
+                "dir": REFS_DIR,
+                "summary": {
+                    "attributes": len(attributes),
+                    "options": sum(len(v) for v in attr_options.values()),
+                    "categories": len(categories),
+                    "families": len(families),
+                    "variants": len(variants),
+                    "groups": len(attr_groups),
+                    "types": len(attr_types),
+                    "prefixes": len(sku_prefixes),
+                },
+                "col_meta": col_meta,
+                "unknown_columns": unknown_columns,
+                "families": {k: v["label"] for k, v in families.items()},
+                "categories": categories,
+            },
         })
 
 
@@ -403,6 +670,11 @@ def api_checks():
                     groups[c["type"]].append({"pm": "(sans parent)",
                                               "sku": s(e["values"].get("sku")),
                                               "msg": c["msg"], "severity": c["severity"]})
+        for col in unknown_columns:
+            groups["attribut_inconnu"].append({"pm": "-",
+                                               "msg": "Colonne « %s » : aucun attribut « %s » dans le dictionnaire"
+                                                      % (col, attr_code_of(col)),
+                                               "severity": "info"})
         out = [{"type": t, "label": LABELS.get(t, t), "count": len(items),
                 "items": sorted(items, key=lambda x: (x["pm"], x.get("sku", "")))[:200]}
                for t, items in sorted(groups.items(), key=lambda kv: -len(kv[1]))]
@@ -424,6 +696,8 @@ def api_export():
                      download_name=os.path.basename(XLSX).replace(".xlsx", "_controle.xlsx"))
 
 
+scan()
+load_refs()
 scan()
 
 if __name__ == "__main__":

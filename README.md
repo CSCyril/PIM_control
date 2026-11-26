@@ -43,10 +43,34 @@ Le serveur n'écoute que sur `127.0.0.1` (boucle locale uniquement).
   axes de variante (`family_variant`) vides ou en double, produit orphelin (parent sans PM),
   SKU en double, produit désactivé, valeur sans unité / unité sans valeur, champs
   obligatoires vides (remplis à ≥ 90 % dans la source).
+- **Référentiels Akeneo** (dossier `refs/`, voir ci-dessous) : autocomplétion par options
+  officielles (code + libellé), libellés/types/groupes d'attributs en en-tête de colonnes,
+  axes de variante résolus via la LINKINGTABLE, et contrôles supplémentaires :
+  valeur d'option hors dictionnaire, famille non déclarée, `family_variant` absent de la
+  LINKINGTABLE, colonne PIM sans attribut correspondant.
 - **Tableau des anomalies** global : toutes les anomalies regroupées par type, cliquables
   pour ouvrir directement le PM concerné.
 - **Sauvegarde automatique** dans le fichier Excel à chaque modification, plus bouton
   💾 Enregistrer et ⬇ Exporter Excel.
+
+## Référentiels Akeneo (`refs/`)
+
+Le dossier `refs/` contient les exports du dictionnaire Akeneo (10 fichiers `.xlsx`) :
+
+| Fichier | Usage dans l'outil |
+|---|---|
+| DICTIONARY ATTRIBUTES | libellé, type, groupe, niveau (PM/produit) de chaque attribut → en-têtes de colonnes et fiches |
+| DICTIONARY ATTRIBUTE OPTIONS | options officielles par attribut → **autocomplétion code + libellé** et contrôle « valeur hors dictionnaire » |
+| DICTIONARY CATEGORIES | codes catégories + libellés → autocomplétion du champ `categories` |
+| DICTIONARY FAMILIES | familles + attributs + obligatoires → autocomplétion `family`, contrôle « famille non déclarée » |
+| LINKINGTABLE (ou FAMILIE VARIANTS) | `family_variant` → famille + axes de variante (référence officielle pour les contrôles d'axes) |
+| DICTIONARY ATTRIBUTE GROUPS | libellés des groupes d'attributs (INF, MKG…) |
+| DICTIONARY ATTRIBUTE TYPES | description des types d'attributs |
+| DICTIONARY PREFIXES | préfixes de SKU (informatif) |
+| DICTIONARY AKENEO TREE | arbre (vide dans la source fournie) |
+
+Sans `refs/` (ou avec `REFS_DIR=/autre/dossier`), l'outil fonctionne comme avant :
+l'autocomplétion retombe sur les valeurs distinctes présentes dans le fichier PIM.
 
 ## Structure du fichier attendu
 

@@ -36,27 +36,45 @@ async function loadState() {
             (STATE.last_saved ? " — dernière sauvegarde : " + STATE.last_saved : ""));
 }
 
+function colOptions(col) {
+  const m = STATE.refs && STATE.refs.col_meta && STATE.refs.col_meta[col];
+  return (m && m.options) ? m.options : null;
+}
+
 function buildDatalists() {
   const dlParent = $("#dl-parent");
   dlParent.innerHTML = STATE.pm_list.map(p => `<option value="${esc(p.code)}">`).join("");
   document.querySelectorAll("datalist.dyn").forEach(d => d.remove());
-  for (const [col, vals] of Object.entries(STATE.distinct_pr)) {
-    if (vals.length <= 300) {
-      const dl = document.createElement("datalist");
-      dl.id = "dl-pr-" + col;
-      dl.className = "dyn";
-      dl.innerHTML = vals.map(v => `<option value="${esc(v)}">`).join("");
-      document.body.appendChild(dl);
+  const mk = (id, entries) => {
+    const dl = document.createElement("datalist");
+    dl.id = id;
+    dl.className = "dyn";
+    dl.innerHTML = entries.map(([v, l]) => `<option value="${esc(v)}">${esc(l || "")}</option>`).join("");
+    document.body.appendChild(dl);
+  };
+  const buildFor = (cols, distinct, prefix) => {
+    for (const col of cols) {
+      const opts = colOptions(col);
+      const entries = [];
+      if (opts) for (const [c, l] of Object.entries(opts)) entries.push([c, l]);
+      for (const v of (distinct[col] || [])) if (!opts || !(v in opts)) entries.push([v, null]);
+      if (col === "categories" && STATE.refs.categories)
+        for (const [c, l] of Object.entries(STATE.refs.categories)) entries.push([c, l]);
+      if (col === "family" && STATE.refs.families)
+        for (const [c, l] of Object.entries(STATE.refs.families)) entries.push([c, l]);
+      if (entries.length <= 2000) mk(prefix + col, entries);
     }
-  }
-  for (const [col, vals] of Object.entries(STATE.distinct_pm)) {
-    if (vals.length <= 300) {
-      const dl = document.createElement("datalist");
-      dl.id = "dl-pm-" + col;
-      dl.className = "dyn";
-      dl.innerHTML = vals.map(v => `<option value="${esc(v)}">`).join("");
-      document.body.appendChild(dl);
-    }
+  };
+  buildFor(STATE.pr_hdr, STATE.distinct_pr, "dl-pr-");
+  buildFor(STATE.pm_hdr, STATE.distinct_pm, "dl-pm-");
+  const ri = $("#refs-info");
+  if (ri && STATE.refs.loaded) {
+    const sm = STATE.refs.summary;
+    ri.textContent = "📖 réf: " + sm.attributes + " attr · " + sm.options + " options · " +
+      sm.categories + " cat · " + sm.families + " fam · " + sm.variants + " variantes";
+    ri.title = "Référentiels chargés depuis " + STATE.refs.dir;
+  } else if (ri) {
+    ri.textContent = "📖 pas de référentiel (dossier refs/ vide ou absent)";
   }
 }
 
@@ -128,12 +146,14 @@ function renderPM() {
   const row = d.pm_rows.find(r => r.row === currentTabRow);
   if (row) {
     fields.innerHTML = `<div class="card"><h3>Attributs du PM (ligne ${row.row})</h3>
-      <div class="grid">` + STATE.pm_hdr.map(h => `
+      <div class="grid">` + STATE.pm_hdr.map(h => {
+        const m = STATE.refs && STATE.refs.col_meta[h];
+        return `
         <div class="field">
-          <label>${esc(h)}</label>
+          <label>${m && m.label ? esc(m.label) + ' <small>' + esc(h) + '</small>' : esc(h)}</label>
           <input data-pm-row="${row.row}" data-field="${esc(h)}" list="dl-pm-${esc(h)}"
                  value="${esc(fmt(row.values[h]))}">
-        </div>`).join("") + `</div>
+        </div>`; }).join("") + `</div>
       <div class="row-actions"><button id="btn-del-pm-row" class="danger">🗑 Supprimer cette ligne PM</button></div>
       </div>`;
     fields.querySelectorAll("input").forEach(inp => {
@@ -186,8 +206,12 @@ function renderProducts() {
   $("#prod-count").textContent = "(" + d.products.length + ")";
   const thead = $("#products-table thead");
   thead.innerHTML = "<tr><th class='sticky'>sku</th>" +
-    STATE.pr_hdr.filter(h => h !== "sku").map(h =>
-      `<th class="${h.endsWith("-unit") ? "unit" : ""}">${esc(h)}</th>`).join("") +
+    STATE.pr_hdr.filter(h => h !== "sku").map(h => {
+      const m = STATE.refs && STATE.refs.col_meta[h];
+      const label = m ? (m.is_unit ? "unité de " + m.label : m.label) : null;
+      const tip = esc(h) + (m && m.type ? " · type " + m.type : "") + (m && m.group_label ? " · groupe " + m.group_label : "");
+      return `<th class="${h.endsWith("-unit") ? "unit" : ""}" title="${tip}">${esc(h)}${label ? `<span class="collabel">${esc(label)}${m.type ? " · " + esc(m.type) : ""}</span>` : ""}</th>`;
+    }).join("") +
     "<th>contrôles</th><th></th></tr>";
   const tbody = $("#products-table tbody");
   tbody.innerHTML = d.products.map(p => {
@@ -195,9 +219,14 @@ function renderProducts() {
     const info = p.checks.length - warn;
     return `<tr data-row="${p.row}" class="${p.checks.length ? "has-issues" : ""}">
       <td class="sticky" data-sku="${esc(fmt(p.values.sku))}" data-field="sku" title="cliquer pour modifier">${esc(fmt(p.values.sku)) || "—"}</td>
-      ${STATE.pr_hdr.filter(h => h !== "sku").map(h => `
+      ${STATE.pr_hdr.filter(h => h !== "sku").map(h => {
+        const m = STATE.refs && STATE.refs.col_meta[h];
+        const v = fmt(p.values[h]);
+        const optLabel = m && m.options && v ? m.options[v] : null;
+        return `
         <td class="${h.endsWith("-unit") ? "unit" : ""} ${p.checks.some(c => c.msg.includes(h)) ? "cell-warn" : ""}"
-            data-field="${esc(h)}" title="cliquer pour modifier">${esc(fmt(p.values[h])) || '<span class="empty-cell">—</span>'}</td>`).join("")}
+            data-field="${esc(h)}" title="${esc(optLabel ? optLabel + " — " : "")}cliquer pour modifier">${esc(v) || '<span class="empty-cell">—</span>'}</td>`;
+      }).join("")}
       <td class="checks-cell">${p.checks.length
           ? `<details><summary class="${warn ? "issue" : "info"}">⚠${p.checks.length}</summary>
              <ul>${p.checks.map(c => `<li class="${c.severity}">${esc(c.msg)}</li>`).join("")}</ul></details>`
