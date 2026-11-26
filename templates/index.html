@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Contrôle PIM — PM par PM</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">🔍 Contrôle PIM <span class="sub">PM par PM</span></div>
+  <input id="search" type="search" placeholder="Rechercher un code PM… (ex. NSPLD052)">
+  <select id="filter">
+    <option value="all">Tous les PM</option>
+    <option value="issues">Avec anomalies</option>
+    <option value="nopm">Sans fiche PM</option>
+    <option value="noproduct">Sans produit</option>
+  </select>
+  <button id="btn-prev" title="PM précédent">◀ Précédent</button>
+  <button id="btn-next" title="PM suivant">Suivant ▶</button>
+  <button id="btn-next-issue" class="warn" title="Aller au prochain PM avec anomalies">⚠ Suivant avec anomalie</button>
+  <span class="spacer"></span>
+  <button id="btn-dashboard">📊 Tableau des anomalies</button>
+  <button id="btn-save">💾 Enregistrer</button>
+  <a id="btn-export" href="/api/export" class="btn-link">⬇ Exporter Excel</a>
+  <span id="status" class="status">chargement…</span>
+</header>
+
+<div id="layout">
+  <aside id="sidebar">
+    <div id="pm-count" class="pm-count"></div>
+    <ul id="pm-list"></ul>
+  </aside>
+  <main id="main">
+    <div id="empty" class="empty">Sélectionnez un PM dans la liste de gauche…</div>
+    <div id="pm-view" style="display:none">
+      <div id="pm-head"></div>
+      <div id="pm-tabs"></div>
+      <div id="pm-fields"></div>
+      <div id="pm-checks"></div>
+      <div id="products-head">
+        <h2>Produits liés <span id="prod-count"></span></h2>
+        <button id="btn-add-product">＋ Ajouter un produit</button>
+      </div>
+      <div id="products-wrap">
+        <table id="products-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="dashboard" class="overlay" style="display:none">
+  <div class="overlay-box">
+    <div class="overlay-head">
+      <h2>📊 Tableau des anomalies</h2>
+      <button id="btn-close-dashboard">✕ Fermer</button>
+    </div>
+    <div id="dashboard-body"></div>
+  </div>
+</div>
+
+<datalist id="dl-parent"></datalist>
+<template id="dl-cols"></template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
