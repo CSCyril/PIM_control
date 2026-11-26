@@ -20,6 +20,7 @@
   <button id="btn-next" title="PM suivant">Suivant ▶</button>
   <button id="btn-next-issue" class="warn" title="Aller au prochain PM avec anomalies">⚠ Suivant avec anomalie</button>
   <span class="spacer"></span>
+  <button id="btn-new-pm">＋ Nouveau PM</button>
   <button id="btn-dashboard">📊 Tableau des anomalies</button>
   <button id="btn-save">💾 Enregistrer</button>
   <a id="btn-export" href="/api/export" class="btn-link">⬇ Exporter Excel</a>
@@ -83,7 +84,45 @@
   </div>
 </div>
 
+<div id="modal-newpm" class="overlay" style="display:none">
+  <div class="overlay-box">
+    <div class="overlay-head"><h2>＋ Créer un nouveau PM</h2><button data-close="modal-newpm">✕ Fermer</button></div>
+    <div class="modal-body">
+      <div class="grid">
+        <div class="field"><label>code <small>(proposé automatiquement)</small></label>
+          <input id="np-code"><div class="row-actions"><button id="np-nextcode" class="mini-btn">🎲 Proposer le prochain code libre</button></div></div>
+        <div class="field"><label>family_variant</label><input id="np-fv" list="dl-variants"></div>
+        <div class="field"><label>categories</label><input id="np-cat" list="dl-pr-categories"></div>
+        <div class="field"><label>Marque EUINF0010</label><input id="np-euinf0010" list="dl-pm-EUINF0010"></div>
+        <div class="field"><label>Type EUINF0020</label><input id="np-euinf0020" list="dl-pm-EUINF0020"></div>
+        <div class="field"><label>Application EUINF0030</label><input id="np-euinf0030" list="dl-pm-EUINF0030"></div>
+        <div class="field wide"><label>Description courte EUMKG0030-fr_FR (obligatoire)</label><textarea id="np-30" rows="3"></textarea></div>
+        <div class="field wide"><label>Description longue EUMKG0040-fr_FR</label><textarea id="np-40" rows="4"></textarea></div>
+        <div class="field"><label>Nom du modèle EUMKG0120-fr_FR (obligatoire)</label><input id="np-120"></div>
+      </div>
+      <div class="row-actions"><button id="np-submit">💾 Créer le PM</button> <span id="np-status" class="hint"></span></div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-split" class="overlay" style="display:none">
+  <div class="overlay-box">
+    <div class="overlay-head"><h2>✂️ Scinder le PM <span id="split-code"></span></h2><button data-close="modal-split">✕ Fermer</button></div>
+    <div class="modal-body">
+      <p class="hint">Choisissez un critère de scindage (les produits sont pré-cochés par groupe) ou sélectionnez manuellement. Les produits non cochés restent dans le PM d'origine. Chaque nouveau PM reçoit un code libre proposé + les champs obligatoires.</p>
+      <div class="row-actions">
+        <select id="split-criterion"><option value="manuel">— manuel (cocher les produits) —</option></select>
+        <button id="split-ai">🤖 Suggérer le scindage via l'IA</button>
+        <button id="split-apply">✂️ Scinder</button>
+        <span id="split-status" class="hint"></span>
+      </div>
+      <div id="split-groups"></div>
+    </div>
+  </div>
+</div>
+
 <datalist id="dl-parent"></datalist>
+<datalist id="dl-variants"></datalist>
 <template id="dl-cols"></template>
 
 <script src="/static/app.js"></script>

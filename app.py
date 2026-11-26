@@ -279,7 +279,7 @@ def load_refs():
 
 
 app = Flask(__name__)
-lock = threading.Lock()
+lock = threading.RLock()
 
 wb = openpyxl.load_workbook(XLSX)
 pm_ws = wb["PM"]
@@ -606,6 +606,7 @@ def api_state():
                 "unknown_columns": unknown_columns,
                 "families": {k: v["label"] for k, v in families.items()},
                 "categories": categories,
+                "variants": sorted(variants.keys()),
             },
         })
 
@@ -644,14 +645,118 @@ def api_pm_delete(r):
 def api_pm_create():
     data = request.get_json(force=True)
     code = s(data.get("code"))
+    values = data.get("values") or {}
     with lock:
         if not code or code in pm_by_code:
             return jsonify({"error": "code vide ou déjà existant"}), 400
         r = pm_ws.max_row + 1
         pm_ws.cell(row=r, column=pm_col["code"]).value = code
+        for f, v in values.items():
+            if f in pm_col:
+                pm_ws.cell(row=r, column=pm_col[f]).value = parse_value(v)
         scan()
         save()
         return jsonify({"ok": True, "row": r, "saved_at": last_saved})
+
+
+@app.route("/api/codes/next")
+def api_codes_next():
+    with lock:
+        nums = [int(m.group(1)) for c in pm_by_code
+                for m in [re.fullmatch(r"NSPLD(\d+)", c)] if m]
+        mx = max(nums) if nums else 0
+        nxt = mx + 1
+        return jsonify({"next": "NSPLD%03d" % nxt, "max": mx, "count": len(pm_by_code)})
+
+
+def _next_free_codes(n, start):
+    out = []
+    cur = start
+    with lock:
+        while len(out) < n:
+            cur += 1
+            c = "NSPLD%03d" % cur
+            if c not in pm_by_code:
+                out.append(c)
+    return out
+
+
+@app.route("/api/pm/<path:code>/split_suggestions")
+def api_split_suggestions(code):
+    with lock:
+        d = pm_detail(code)
+        prods = d["products"]
+        fv = s(d["pm_rows"][0]["values"].get("family_variant")) if d["pm_rows"] else ""
+        axes = [a for a in fv.split("_")[1:] if a in pr_col] if fv else []
+        suggestions = []
+        criteria = [("Axe variante : %s" % a, a) for a in axes]
+        criteria += [("Coloris EUINF0233", "EUINF0233"), ("Sélection EUINF0400", "EUINF0400"),
+                     ("Catégorie", "categories"), ("Marque EUINF0010", "EUINF0010")]
+        for label, field in criteria:
+            if field not in pr_col:
+                continue
+            groups = defaultdict(list)
+            for p in prods:
+                groups[s(p["values"].get(field)) or "(vide)"].append(p["row"])
+            if len(groups) > 1:
+                suggestions.append({"label": label, "field": field,
+                                    "groups": {k: v for k, v in groups.items()}})
+        nums = [int(m.group(1)) for c in pm_by_code for m in [re.fullmatch(r"NSPLD(\d+)", c)] if m]
+        start = max(nums) if nums else 0
+        return jsonify({
+            "code": code, "family_variant": fv, "axes": axes,
+            "products": [{"row": p["row"], "sku": s(p["values"].get("sku")),
+                          "name": s(p["values"].get("EUMKG0160-fr_FR")),
+                          "values": {k: p["values"].get(k) for k in
+                                     (["EUINF0233", "EUINF0400", "categories", "EUINF0010"] + axes)}} for p in prods],
+            "suggestions": suggestions,
+            "next_codes": _next_free_codes(max(2, len(suggestions) + 1), start),
+        })
+
+
+@app.route("/api/pm/<path:code>/split", methods=["POST"])
+def api_split(code):
+    data = request.get_json(force=True)
+    groups = data.get("groups") or []
+    with lock:
+        src = pm_by_code.get(code) or []
+        if not src:
+            return jsonify({"error": "PM inconnu"}), 404
+        src_vals = next(e for e in pm_rows if e["row"] == src[0])["values"]
+        valid_rows = {p["row"] for p in pr_rows if s(p["values"].get("parent")) == code}
+        created, errors = [], []
+        used_codes = set()
+        for g in groups:
+            new_code = s(g.get("new_code"))
+            rows = g.get("rows") or []
+            values = g.get("values") or {}
+            if not new_code or new_code in pm_by_code or new_code in used_codes:
+                errors.append({"group": new_code, "error": "code vide, existant ou dupliqué"})
+                continue
+            bad_rows = [r for r in rows if r not in valid_rows]
+            if bad_rows:
+                errors.append({"group": new_code, "error": "lignes produit invalides: %s" % bad_rows})
+                continue
+            merged = dict(src_vals)
+            merged.update({k: v for k, v in values.items() if k in pm_col})
+            merged["code"] = new_code
+            for mand in ("EUMKG0030-fr_FR", "EUMKG0120-fr_FR"):
+                if not s(merged.get(mand)):
+                    errors.append({"group": new_code, "error": "champ obligatoire vide : %s" % mand})
+                    break
+            else:
+                r = pm_ws.max_row + 1
+                for f, v in merged.items():
+                    if f in pm_col:
+                        pm_ws.cell(row=r, column=pm_col[f]).value = parse_value(v)
+                for row in rows:
+                    pr_ws.cell(row=row, column=pr_col["parent"]).value = new_code
+                used_codes.add(new_code)
+                created.append({"new_code": new_code, "row": r, "nb_produits": len(rows)})
+        if created:
+            scan()
+            save()
+        return jsonify({"created": created, "errors": errors, "saved_at": last_saved})
 
 
 @app.route("/api/produit/row/<int:r>", methods=["PUT"])
@@ -754,7 +859,13 @@ SYSTEM_PROMPT = (
     "}\n"
     "Règles : n'utilise que des feuilles, numéros de ligne et colonnes présents dans le contexte ; "
     "pour un attribut à options, value doit être un code d'option fourni dans le contexte "
-    "(ou null pour vider) ; value null = vider la cellule ; ne modifie que ce qui est demandé."
+    "(ou null pour vider) ; value null = vider la cellule ; ne modifie que ce qui est demandé.\n"
+    "Tu peux aussi créer de nouveaux PM (opération de scindage) avec des items de la forme "
+    "{\"op\": \"create_pm\", \"code\": \"NSPLDxxx\", \"values\": {\"family_variant\": ..., \"categories\": ..., "
+    "\"EUMKG0030-fr_FR\": ..., \"EUMKG0040-fr_FR\": ..., \"EUMKG0120-fr_FR\": ...}} "
+    "et déplacer des produits vers ce nouveau PM avec "
+    "{\"sheet\": \"produits\", \"row\": <ligne>, \"field\": \"parent\", \"value\": \"NSPLDxxx\"}. "
+    "Propose des codes NSPLD libres (supérieurs au plus grand code existant) et remplis les champs obligatoires."
 )
 
 
@@ -849,6 +960,19 @@ def api_assistant_apply():
     applied, errors = [], []
     with lock:
         for it in patch:
+            if it.get("op") == "create_pm":
+                code = s(it.get("code"))
+                values = it.get("values") or {}
+                if not code or code in pm_by_code:
+                    errors.append({"item": it, "error": "code PM vide ou déjà existant"})
+                    continue
+                r = pm_ws.max_row + 1
+                pm_ws.cell(row=r, column=pm_col["code"]).value = code
+                for f, v in values.items():
+                    if f in pm_col:
+                        pm_ws.cell(row=r, column=pm_col[f]).value = parse_value(v)
+                applied.append({"op": "create_pm", "code": code, "row": r})
+                continue
             sheet, row, field, value = it.get("sheet"), it.get("row"), it.get("field"), it.get("value")
             ws = pm_ws if sheet == "PM" else pr_ws if sheet == "produits" else None
             colmap = pm_col if sheet == "PM" else pr_col

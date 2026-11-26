@@ -83,6 +83,23 @@ texte** (5 lignes, pleine largeur sur 2 colonnes). Dans le tableau produits, un 
 cellule texte/textarea longue ouvre aussi une zone de texte multi-lignes (Ctrl+Entrée pour
 enregistrer, Échap pour annuler).
 
+## Créer un nouveau PM / scinder un PM
+
+- Bouton **＋ Nouveau PM** (barre du haut) : formulaire avec **proposition automatique du
+  prochain code libre** (`GET /api/codes/next`, analyse des codes `NSPLD###` existants),
+  `family_variant` (autocomplétion depuis la LINKINGTABLE), catégories, options (codes avec
+  libellés) et les champs obligatoires `EUMKG0030-fr_FR` / `EUMKG0120-fr_FR` (bloquants si vides).
+  Création via `POST /api/pm` avec valeurs, enregistrée dans le xlsx.
+- Bouton **✂️ Scinder ce PM** sur la fiche PM : choisit un critère de scindage (axe de variante,
+  coloris EUINF0233, sélection EUINF0400, catégorie, marque) ou sélection manuelle des produits ;
+  chaque groupe reçoit un **code libre proposé** et les champs obligatoires pré-remplis
+  (hérités du PM source, modifiables). Application via `POST /api/pm/<code>/split`
+  (validation : code libre, lignes valides, obligatoires non vides) + réattachement des
+  produits (`parent`), le tout sauvegardé dans le xlsx.
+- Bouton **🤖 Suggérer le scindage via l'IA** dans la fenêtre de scindage : envoie le PM à
+  l'assistant (contexte complet) qui renvoie des opérations `create_pm` (code NSPLD libre +
+  valeurs obligatoires) et des déplacements de produits, pré-remplissant le formulaire.
+
 ## Assistant IA par PM
 
 Bouton **🤖 Assistant IA** sur chaque fiche PM : décrivez la modification souhaitée en français

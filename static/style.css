@@ -119,3 +119,11 @@ button.danger.mini { padding: 1px 6px; font-size: 11px; }
 .dash-group li.warning { color: #9a3412; }
 .dash-group li.info { color: #555; }
 .dash-group a { color: #16324f; font-family: Consolas, monospace; font-weight: 600; }
+.modal-body { padding: 12px 18px 20px; overflow-y: auto; }
+.mini-btn { padding: 3px 8px; font-size: 11px; border: 1px solid #c6cfd9; border-radius: 5px; background: #fff; cursor: pointer; }
+.split-group { border: 1px solid #d8dee6; border-radius: 8px; padding: 8px 12px; margin-top: 10px; background: #fbfcfe; }
+.split-group h4 { margin: 0 0 6px; font-size: 13px; }
+.split-group .grid { margin-bottom: 6px; }
+.split-group ul { margin: 4px 0 0 16px; padding: 0; max-height: 140px; overflow-y: auto; }
+.split-group li { font-size: 12px; }
+.split-group li label { cursor: pointer; }

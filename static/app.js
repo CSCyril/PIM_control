@@ -67,6 +67,9 @@ function buildDatalists() {
   };
   buildFor(STATE.pr_hdr, STATE.distinct_pr, "dl-pr-");
   buildFor(STATE.pm_hdr, STATE.distinct_pm, "dl-pm-");
+  if (STATE.refs.variants) {
+    $("#dl-variants").innerHTML = STATE.refs.variants.map(v => `<option value="${esc(v)}">`).join("");
+  }
   const ri = $("#refs-info");
   if (ri && STATE.refs.loaded) {
     const sm = STATE.refs.summary;
@@ -126,7 +129,10 @@ function renderPM() {
     <div class="head-actions">
       ${d.has_pm ? "" : '<button id="btn-create-pm">＋ Créer la fiche PM</button>'}
       <button id="btn-assistant">🤖 Assistant IA</button>
+      ${d.has_pm ? '<button id="btn-split">✂️ Scinder ce PM</button>' : ""}
     </div>`;
+  const bsp = $("#btn-split");
+  if (bsp) bsp.addEventListener("click", openSplit);
   const ba = $("#btn-assistant");
   if (ba) ba.addEventListener("click", () => {
     const p = $("#assistant-panel");
@@ -448,3 +454,171 @@ $("#ai-send").addEventListener("click", sendAssistant);
 $("#ai-copy").addEventListener("click", () => { const t = $("#ai-prompt"); t.select(); document.execCommand("copy"); $("#ai-status").textContent = "Prompt copié 📋"; });
 $("#ai-preview").addEventListener("click", previewAnswer);
 $("#ai-apply").addEventListener("click", applyPatch);
+
+// ---------- Nouveau PM ----------
+document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", () => {
+  $("#" + b.dataset.close).style.display = "none";
+}));
+$("#btn-new-pm").addEventListener("click", async () => {
+  $("#modal-newpm").style.display = "flex";
+  $("#np-status").textContent = "";
+  try {
+    const r = await api("/api/codes/next");
+    $("#np-code").value = r.next;
+    $("#np-status").textContent = "prochain code libre : " + r.next + " (" + r.count + " PM existants, max " + r.max + ")";
+  } catch (e) { $("#np-status").textContent = e.message; }
+});
+$("#np-nextcode").addEventListener("click", async () => {
+  const r = await api("/api/codes/next");
+  $("#np-code").value = r.next;
+});
+$("#np-submit").addEventListener("click", async () => {
+  const code = $("#np-code").value.trim();
+  if (!code) { $("#np-status").textContent = "Code obligatoire."; return; }
+  const values = {
+    family_variant: $("#np-fv").value.trim(),
+    categories: $("#np-cat").value.trim(),
+    EUINF0010: $("#np-euinf0010").value.trim(),
+    EUINF0020: $("#np-euinf0020").value.trim(),
+    EUINF0030: $("#np-euinf0030").value.trim(),
+    "EUMKG0030-fr_FR": $("#np-30").value.trim(),
+    "EUMKG0040-fr_FR": $("#np-40").value.trim(),
+    "EUMKG0120-fr_FR": $("#np-120").value.trim(),
+  };
+  if (!values["EUMKG0030-fr_FR"] || !values["EUMKG0120-fr_FR"]) {
+    $("#np-status").textContent = "EUMKG0030-fr_FR et EUMKG0120-fr_FR sont obligatoires.";
+    return;
+  }
+  try {
+    const r = await api("/api/pm", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({code, values})});
+    $("#modal-newpm").style.display = "none";
+    await afterMutation();
+    openPM(code);
+  } catch (e) { $("#np-status").textContent = "Erreur : " + e.message; }
+});
+
+// ---------- Scinder un PM ----------
+let SPLIT = null;
+
+async function openSplit() {
+  if (!currentCode) return;
+  $("#modal-split").style.display = "flex";
+  $("#split-code").textContent = currentCode;
+  $("#split-status").textContent = "chargement…";
+  SPLIT = await api("/api/pm/" + encodeURIComponent(currentCode) + "/split_suggestions");
+  const sel = $("#split-criterion");
+  sel.innerHTML = '<option value="manuel">— manuel (cocher les produits) —</option>' +
+    SPLIT.suggestions.map((sg, i) => `<option value="${i}">${esc(sg.label)} (${Object.keys(sg.groups).length} groupes)</option>`).join("");
+  renderSplitGroups("manuel");
+  $("#split-status").textContent = SPLIT.products.length + " produits, prochain code libre : " + SPLIT.next_codes[0];
+}
+
+function renderSplitGroups(mode) {
+  const wrap = $("#split-groups");
+  wrap.innerHTML = "";
+  const prods = SPLIT.products;
+  const groups = [];
+  if (mode === "manuel") {
+    groups.push({label: "Nouveau PM (sélection manuelle)", rows: prods.map(p => p.row)});
+  } else {
+    const sg = SPLIT.suggestions[+mode];
+    for (const [val, rows] of Object.entries(sg.groups)) {
+      groups.push({label: sg.label + " = " + val, rows});
+    }
+  }
+  groups.forEach((g, gi) => {
+    const code = SPLIT.next_codes[gi] || "";
+    const srcName = DETAIL.pm_rows.length ? (DETAIL.pm_rows[0].values["EUMKG0030-fr_FR"] || currentCode) : currentCode;
+    const div = document.createElement("div");
+    div.className = "split-group";
+    div.innerHTML = `<h4>Groupe ${gi + 1} : ${esc(g.label)}</h4>
+      <div class="grid">
+        <div class="field"><label>nouveau code PM</label><input class="sg-code" value="${esc(code)}"></div>
+        <div class="field"><label>nom modèle EUMKG0120 (oblig.)</label><input class="sg-120" value="${esc(srcName).slice(0, 40).toUpperCase()}"></div>
+        <div class="field wide"><label>desc. courte EUMKG0030 (oblig.)</label><input class="sg-30" value="${esc(srcName + " - " + g.label)}"></div>
+        <div class="field wide"><label>desc. longue EUMKG0040</label><input class="sg-40" value="${esc(srcName)}"></div>
+      </div>
+      <ul>${g.rows.map(r => {
+        const p = prods.find(x => x.row === r);
+        return `<li><label><input type="checkbox" class="sg-row" data-row="${r}" checked> ${esc(p ? p.sku : r)} — ${esc(p ? (p.name || "") : "")}</label></li>`;
+      }).join("")}</ul>`;
+    wrap.appendChild(div);
+  });
+}
+
+$("#split-criterion").addEventListener("change", (e) => renderSplitGroups(e.target.value));
+
+$("#split-ai").addEventListener("click", async () => {
+  $("#split-status").textContent = "L'IA analyse le PM et propose un scindage…";
+  try {
+    const r = await api("/api/assistant", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({pm: currentCode, message:
+        "Analyse ce PM et propose un scindage intelligent en nouveaux PM si pertinent (sinon dis-le). " +
+        "Pour chaque nouveau PM : op create_pm avec un code NSPLD libre (supérieur au max existant) et values " +
+        "obligatoires remplies (family_variant, categories, EUMKG0030-fr_FR, EUMKG0040-fr_FR, EUMKG0120-fr_FR), " +
+        "puis déplace les produits concernés (sheet produits, field parent). " +
+        "Explique chaque groupe dans 'explication'."})});
+    if (r.mode === "manuel") {
+      $("#ai-prompt").value = r.prompt; $("#ai-prompt-wrap").style.display = "block";
+      $("#assistant-panel").style.display = "block";
+      $("#ai-status").textContent = "Mode manuel : copiez le prompt, collez la réponse JSON dans l'assistant.";
+      $("#split-status").textContent = "Passez par le panneau Assistant IA (ouvert) pour récupérer la suggestion.";
+      return;
+    }
+    const creates = (r.patch || []).filter(p => p.op === "create_pm");
+    if (!creates.length) { $("#split-status").textContent = "L'IA ne propose pas de scindage. " + (r.explication || ""); return; }
+    // pré-remplit les groupes du dialogue avec la suggestion IA
+    const wrap = $("#split-groups");
+    wrap.innerHTML = "";
+    creates.forEach((c, gi) => {
+      const vals = c.values || {};
+      const rows = (r.patch || []).filter(p => p.sheet === "produits" && p.field === "parent" && p.value === c.code)
+        .map(p => p.row);
+      const div = document.createElement("div");
+      div.className = "split-group";
+      div.innerHTML = `<h4>Suggestion IA ${gi + 1} (code ${esc(c.code)})</h4>
+        <div class="grid">
+          <div class="field"><label>nouveau code PM</label><input class="sg-code" value="${esc(c.code)}"></div>
+          <div class="field"><label>nom modèle EUMKG0120 (oblig.)</label><input class="sg-120" value="${esc(vals["EUMKG0120-fr_FR"] || "")}"></div>
+          <div class="field wide"><label>desc. courte EUMKG0030 (oblig.)</label><input class="sg-30" value="${esc(vals["EUMKG0030-fr_FR"] || "")}"></div>
+          <div class="field wide"><label>desc. longue EUMKG0040</label><input class="sg-40" value="${esc(vals["EUMKG0040-fr_FR"] || "")}"></div>
+          <div class="field"><label>family_variant</label><input class="sg-fv" value="${esc(vals.family_variant || SPLIT.family_variant || "")}"></div>
+          <div class="field"><label>categories</label><input class="sg-cat" value="${esc(vals.categories || "")}"></div>
+        </div>
+        <ul>${rows.map(rr => {
+          const p = SPLIT.products.find(x => x.row === rr);
+          return `<li><label><input type="checkbox" class="sg-row" data-row="${rr}" checked> ${esc(p ? p.sku : rr)} — ${esc(p ? (p.name || "") : "")}</label></li>`;
+        }).join("")}</ul>`;
+      wrap.appendChild(div);
+    });
+    $("#split-status").textContent = "Suggestion IA : " + creates.length + " nouveau(x) PM. " + (r.explication || "").slice(0, 200);
+  } catch (e) { $("#split-status").textContent = "Erreur IA : " + e.message; }
+});
+
+$("#split-apply").addEventListener("click", async () => {
+  const groups = [...document.querySelectorAll(".split-group")].map(div => {
+    const rows = [...div.querySelectorAll(".sg-row:checked")].map(c => +c.dataset.row);
+    return {
+      new_code: div.querySelector(".sg-code").value.trim(),
+      rows,
+      values: {
+        family_variant: (div.querySelector(".sg-fv") || {}).value !== undefined ? div.querySelector(".sg-fv").value.trim() : SPLIT.family_variant,
+        categories: (div.querySelector(".sg-cat") || {}).value !== undefined ? div.querySelector(".sg-cat").value.trim() : (DETAIL.pm_rows[0] ? DETAIL.pm_rows[0].values.categories : ""),
+        "EUMKG0030-fr_FR": div.querySelector(".sg-30").value.trim(),
+        "EUMKG0040-fr_FR": div.querySelector(".sg-40").value.trim(),
+        "EUMKG0120-fr_FR": div.querySelector(".sg-120").value.trim(),
+      },
+    };
+  }).filter(g => g.new_code && g.rows.length);
+  if (!groups.length) { $("#split-status").textContent = "Aucun groupe avec code + produits cochés."; return; }
+  try {
+    const r = await api("/api/pm/" + encodeURIComponent(currentCode) + "/split", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({groups})});
+    $("#split-status").textContent = r.created.length + " PM créé(s)" +
+      (r.errors.length ? ", erreurs: " + JSON.stringify(r.errors) : "") +
+      (r.saved_at ? " — 💾 " + r.saved_at : "");
+    $("#modal-split").style.display = "none";
+    await afterMutation();
+  } catch (e) { $("#split-status").textContent = "Erreur : " + e.message; }
+});
