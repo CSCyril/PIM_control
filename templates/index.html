@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Contrôle PIM — PM par PM</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">🔍 Contrôle PIM <span class="sub">PM par PM</span></div>
+  <input id="search" type="search" placeholder="Rechercher un code PM… (ex. NSPLD052)">
+  <select id="filter">
+    <option value="all">Tous les PM</option>
+    <option value="issues">Avec anomalies</option>
+    <option value="nopm">Sans fiche PM</option>
+    <option value="noproduct">Sans produit</option>
+  </select>
+  <button id="btn-prev" title="PM précédent">◀ Précédent</button>
+  <button id="btn-next" title="PM suivant">Suivant ▶</button>
+  <button id="btn-next-issue" class="warn" title="Aller au prochain PM avec anomalies">⚠ Suivant avec anomalie</button>
+  <span class="spacer"></span>
+  <button id="btn-new-pm">＋ Nouveau PM</button>
+  <button id="btn-dashboard">📊 Tableau des anomalies</button>
+  <button id="btn-save">💾 Enregistrer</button>
+  <a id="btn-export" href="/api/export" class="btn-link">⬇ Exporter Excel</a>
+  <span id="status" class="status">chargement…</span>
+  <span id="refs-info" class="status"></span>
+</header>
+
+<div id="layout">
+  <aside id="sidebar">
+    <div id="pm-count" class="pm-count"></div>
+    <ul id="pm-list"></ul>
+  </aside>
+  <main id="main">
+    <div id="empty" class="empty">Sélectionnez un PM dans la liste de gauche…</div>
+    <div id="pm-view" style="display:none">
+      <div id="pm-head"></div>
+      <div id="pm-tabs"></div>
+      <div id="pm-fields"></div>
+      <div id="pm-checks"></div>
+      <div id="assistant-panel" class="card" style="display:none">
+        <h3>🤖 Assistant IA — modifier ce PM / ses produits</h3>
+        <p class="hint">Décrivez la modification souhaitée. L'assistant reçoit le contexte complet
+        (fiche PM, produits liés, contrôles, dictionnaire d'options) et propose un patch JSON
+        appliquable cellule par cellule. Sans clé API configurée, un prompt copiable est généré.</p>
+        <textarea id="ai-msg" rows="3" placeholder="Ex. : raccourcis le nom du PM, corrige la description longue, harmonise les titres des produits avec la gamme, remplis la taille manquante…"></textarea>
+        <div class="row-actions"><button id="ai-send">Envoyer à l'IA</button> <span id="ai-status" class="hint"></span></div>
+        <div id="ai-prompt-wrap" style="display:none">
+          <label>Prompt à copier (aucune clé API — collez-le à votre IA, puis collez sa réponse JSON ci-dessous) :</label>
+          <textarea id="ai-prompt" rows="8" readonly></textarea>
+          <div class="row-actions"><button id="ai-copy">📋 Copier le prompt</button></div>
+          <textarea id="ai-answer" rows="6" placeholder='Réponse JSON de l\'IA : {"explication": "...", "patch": [{"sheet":"PM","row":2,"field":"EUMKG0120-fr_FR","value":"..."}]}'></textarea>
+          <div class="row-actions"><button id="ai-preview">Prévisualiser la réponse</button></div>
+        </div>
+        <div id="ai-response" style="display:none">
+          <div id="ai-explication"></div>
+          <table id="ai-patch"><thead><tr><th></th><th>feuille</th><th>ligne</th><th>champ</th><th>ancienne valeur</th><th>nouvelle valeur</th></tr></thead><tbody></tbody></table>
+          <div class="row-actions"><button id="ai-apply">✅ Appliquer les modifications cochées</button> <span id="ai-apply-status" class="hint"></span></div>
+        </div>
+      </div>
+      <div id="products-head">
+        <h2>Produits liés <span id="prod-count"></span></h2>
+        <button id="btn-add-product">＋ Ajouter un produit</button>
+      </div>
+      <div id="products-wrap">
+        <table id="products-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="dashboard" class="overlay" style="display:none">
+  <div class="overlay-box">
+    <div class="overlay-head">
+      <h2>📊 Tableau des anomalies</h2>
+      <button id="btn-close-dashboard">✕ Fermer</button>
+    </div>
+    <div id="dashboard-body"></div>
+  </div>
+</div>
+
+<div id="modal-newpm" class="overlay" style="display:none">
+  <div class="overlay-box">
+    <div class="overlay-head"><h2>＋ Créer un nouveau PM</h2><button data-close="modal-newpm">✕ Fermer</button></div>
+    <div class="modal-body">
+      <div class="grid">
+        <div class="field"><label>code <small>(proposé automatiquement)</small></label>
+          <input id="np-code"><div class="row-actions"><button id="np-nextcode" class="mini-btn">🎲 Proposer le prochain code libre</button></div></div>
+        <div class="field"><label>family_variant</label><input id="np-fv" list="dl-variants"></div>
+        <div class="field"><label>categories</label><input id="np-cat" list="dl-pr-categories"></div>
+        <div class="field"><label>Marque EUINF0010</label><input id="np-euinf0010" list="dl-pm-EUINF0010"></div>
+        <div class="field"><label>Type EUINF0020</label><input id="np-euinf0020" list="dl-pm-EUINF0020"></div>
+        <div class="field"><label>Application EUINF0030</label><input id="np-euinf0030" list="dl-pm-EUINF0030"></div>
+        <div class="field wide"><label>Description courte EUMKG0030-fr_FR (obligatoire)</label><textarea id="np-30" rows="3"></textarea></div>
+        <div class="field wide"><label>Description longue EUMKG0040-fr_FR</label><textarea id="np-40" rows="4"></textarea></div>
+        <div class="field"><label>Nom du modèle EUMKG0120-fr_FR (obligatoire)</label><input id="np-120"></div>
+      </div>
+      <div class="row-actions"><button id="np-submit">💾 Créer le PM</button> <span id="np-status" class="hint"></span></div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-split" class="overlay" style="display:none">
+  <div class="overlay-box">
+    <div class="overlay-head"><h2>✂️ Scinder le PM <span id="split-code"></span></h2><button data-close="modal-split">✕ Fermer</button></div>
+    <div class="modal-body">
+      <p class="hint">Choisissez un critère de scindage (les produits sont pré-cochés par groupe) ou sélectionnez manuellement. Les produits non cochés restent dans le PM d'origine. Chaque nouveau PM reçoit un code libre proposé + les champs obligatoires.</p>
+      <div class="row-actions">
+        <select id="split-criterion"><option value="manuel">— manuel (cocher les produits) —</option></select>
+        <button id="split-ai">🤖 Suggérer le scindage via l'IA</button>
+        <button id="split-apply">✂️ Scinder</button>
+        <span id="split-status" class="hint"></span>
+      </div>
+      <div id="split-groups"></div>
+    </div>
+  </div>
+</div>
+
+<datalist id="dl-parent"></datalist>
+<datalist id="dl-variants"></datalist>
+<template id="dl-cols"></template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

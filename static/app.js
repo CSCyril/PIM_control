@@ -1,0 +1,624 @@
+let STATE = null;
+let DETAIL = null;
+let currentCode = null;
+let currentTabRow = null;
+let editCell = null;
+
+const $ = (sel) => document.querySelector(sel);
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function fmt(v) {
+  if (v === null || v === undefined || v === "") return "";
+  return String(v);
+}
+
+function setStatus(msg) {
+  $("#status").textContent = msg;
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(t || r.statusText);
+  }
+  return r.json();
+}
+
+async function loadState() {
+  STATE = await api("/api/state");
+  buildDatalists();
+  renderList();
+  setStatus("Fichier : " + STATE.file + " — sauvegarde de départ : " + STATE.backup +
+            (STATE.last_saved ? " — dernière sauvegarde : " + STATE.last_saved : ""));
+}
+
+function colOptions(col) {
+  const m = STATE.refs && STATE.refs.col_meta && STATE.refs.col_meta[col];
+  return (m && m.options) ? m.options : null;
+}
+
+function buildDatalists() {
+  const dlParent = $("#dl-parent");
+  dlParent.innerHTML = STATE.pm_list.map(p => `<option value="${esc(p.code)}">`).join("");
+  document.querySelectorAll("datalist.dyn").forEach(d => d.remove());
+  const mk = (id, entries) => {
+    const dl = document.createElement("datalist");
+    dl.id = id;
+    dl.className = "dyn";
+    dl.innerHTML = entries.map(([v, l]) => `<option value="${esc(v)}">${esc(l || "")}</option>`).join("");
+    document.body.appendChild(dl);
+  };
+  const buildFor = (cols, distinct, prefix) => {
+    for (const col of cols) {
+      const opts = colOptions(col);
+      const entries = [];
+      if (opts) for (const [c, l] of Object.entries(opts)) entries.push([c, l]);
+      for (const v of (distinct[col] || [])) if (!opts || !(v in opts)) entries.push([v, null]);
+      if (col === "categories" && STATE.refs.categories)
+        for (const [c, l] of Object.entries(STATE.refs.categories)) entries.push([c, l]);
+      if (col === "family" && STATE.refs.families)
+        for (const [c, l] of Object.entries(STATE.refs.families)) entries.push([c, l]);
+      if (entries.length <= 2000) mk(prefix + col, entries);
+    }
+  };
+  buildFor(STATE.pr_hdr, STATE.distinct_pr, "dl-pr-");
+  buildFor(STATE.pm_hdr, STATE.distinct_pm, "dl-pm-");
+  if (STATE.refs.variants) {
+    $("#dl-variants").innerHTML = STATE.refs.variants.map(v => `<option value="${esc(v)}">`).join("");
+  }
+  const ri = $("#refs-info");
+  if (ri && STATE.refs.loaded) {
+    const sm = STATE.refs.summary;
+    ri.textContent = "📖 réf: " + sm.attributes + " attr · " + sm.options + " options · " +
+      sm.categories + " cat · " + sm.families + " fam · " + sm.variants + " variantes";
+    ri.title = "Référentiels chargés depuis " + STATE.refs.dir;
+  } else if (ri) {
+    ri.textContent = "📖 pas de référentiel (dossier refs/ vide ou absent)";
+  }
+}
+
+function filteredList() {
+  const q = $("#search").value.trim().toLowerCase();
+  const f = $("#filter").value;
+  return STATE.pm_list.filter(p => {
+    if (q && !p.code.toLowerCase().includes(q)) return false;
+    if (f === "issues" && p.nb_issues === 0) return false;
+    if (f === "nopm" && p.has_pm) return false;
+    if (f === "noproduct" && p.nb_products > 0) return false;
+    return true;
+  });
+}
+
+function renderList() {
+  const list = filteredList();
+  $("#pm-count").textContent = list.length + " PM affichés / " + STATE.pm_list.length + " au total";
+  $("#pm-list").innerHTML = list.map(p => `
+    <li data-code="${esc(p.code)}" class="${p.code === currentCode ? "active" : ""} ${p.has_pm ? "" : "nopm"}">
+      <span class="code">${esc(p.code)}</span>
+      ${p.has_pm ? "" : '<span class="tag nopm-tag" title="Pas de fiche PM">sans PM</span>'}
+      ${p.nb_pm_rows > 1 ? `<span class="tag dup" title="${p.nb_pm_rows} lignes PM">×${p.nb_pm_rows}</span>` : ""}
+      <span class="tag">${p.nb_products} prod.</span>
+      ${p.nb_issues ? `<span class="tag issue" title="Anomalies">⚠${p.nb_issues}</span>` : ""}
+    </li>`).join("");
+  document.querySelectorAll("#pm-list li").forEach(li => {
+    li.addEventListener("click", () => openPM(li.dataset.code));
+  });
+}
+
+async function openPM(code) {
+  currentCode = code;
+  DETAIL = await api("/api/pm/" + encodeURIComponent(code));
+  currentTabRow = DETAIL.pm_rows.length ? DETAIL.pm_rows[0].row : null;
+  renderList();
+  renderPM();
+  $("#empty").style.display = "none";
+  $("#pm-view").style.display = "block";
+  window.scrollTo(0, 0);
+}
+
+function renderPM() {
+  const d = DETAIL;
+  const head = $("#pm-head");
+  head.innerHTML = `
+    <h1>${esc(d.code)} ${d.has_pm ? "" : '<span class="tag nopm-tag big">fiche PM absente</span>'}
+      ${d.pm_rows.length > 1 ? `<span class="tag dup big">${d.pm_rows.length} lignes PM</span>` : ""}</h1>
+    <div class="head-actions">
+      ${d.has_pm ? "" : '<button id="btn-create-pm">＋ Créer la fiche PM</button>'}
+      <button id="btn-assistant">🤖 Assistant IA</button>
+      ${d.has_pm ? '<button id="btn-split">✂️ Scinder ce PM</button>' : ""}
+    </div>`;
+  const bsp = $("#btn-split");
+  if (bsp) bsp.addEventListener("click", openSplit);
+  const ba = $("#btn-assistant");
+  if (ba) ba.addEventListener("click", () => {
+    const p = $("#assistant-panel");
+    p.style.display = p.style.display === "none" ? "block" : "none";
+  });
+  const bcp = $("#btn-create-pm");
+  if (bcp) bcp.addEventListener("click", async () => {
+    await api("/api/pm", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({code: d.code})});
+    await afterMutation();
+  });
+
+  const tabs = $("#pm-tabs");
+  if (d.pm_rows.length > 1) {
+    tabs.innerHTML = d.pm_rows.map(r =>
+      `<button class="tab ${r.row === currentTabRow ? "active" : ""}" data-row="${r.row}">ligne ${r.row}</button>`).join("");
+    tabs.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+      currentTabRow = +t.dataset.row; renderPM();
+    }));
+  } else tabs.innerHTML = "";
+
+  const fields = $("#pm-fields");
+  const row = d.pm_rows.find(r => r.row === currentTabRow);
+  if (row) {
+    fields.innerHTML = `<div class="card"><h3>Attributs du PM (ligne ${row.row})</h3>
+      <div class="grid">` + STATE.pm_hdr.map(h => {
+        const m = STATE.refs && STATE.refs.col_meta[h];
+        const lbl = m && m.label ? esc(m.label) + ' <small>' + esc(h) + '</small>' : esc(h);
+        if (m && m.type === "textarea") {
+          return `
+        <div class="field wide">
+          <label>${lbl}</label>
+          <textarea rows="5" data-pm-row="${row.row}" data-field="${esc(h)}">${esc(fmt(row.values[h]))}</textarea>
+        </div>`;
+        }
+        return `
+        <div class="field">
+          <label>${lbl}</label>
+          <input data-pm-row="${row.row}" data-field="${esc(h)}" list="dl-pm-${esc(h)}"
+                 value="${esc(fmt(row.values[h]))}">
+        </div>`; }).join("") + `</div>
+      <div class="row-actions"><button id="btn-del-pm-row" class="danger">🗑 Supprimer cette ligne PM</button></div>
+      </div>`;
+    fields.querySelectorAll("input, textarea").forEach(inp => {
+      inp.addEventListener("change", async () => {
+        await api("/api/pm/row/" + inp.dataset.pmRow, {method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({field: inp.dataset.field, value: inp.value})});
+        await afterMutation();
+      });
+    });
+    const del = $("#btn-del-pm-row");
+    if (del) del.addEventListener("click", async () => {
+      if (!confirm("Supprimer la ligne PM " + row.row + " (code " + d.code + ") ? Les produits resteront orphelins.")) return;
+      await api("/api/pm/row/" + row.row, {method: "DELETE"});
+      await afterMutation();
+    });
+  } else {
+    fields.innerHTML = `<div class="card"><p>Aucune ligne dans la feuille <b>PM</b> pour ce code. Les produits rattachés sont orphelins.</p></div>`;
+  }
+
+  renderChecks();
+  renderProducts();
+}
+
+function renderChecks() {
+  const box = $("#pm-checks");
+  const d = DETAIL;
+  if (!d.checks.length) {
+    box.innerHTML = `<div class="card ok">✅ Aucun problème détecté sur ce PM et ses produits.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="card"><h3>⚠ Contrôles de cohérence (${d.checks.length})</h3>
+    <ul class="checks">` + d.checks.map(c => `
+      <li class="${c.severity}" data-sku="${esc(c.sku || "")}">
+        <b>${esc(STATE.labels[c.type] || c.type)}</b> — ${esc(c.msg)}
+      </li>`).join("") + `</ul></div>`;
+  box.querySelectorAll("li[data-sku]").forEach(li => {
+    if (!li.dataset.sku) return;
+    li.style.cursor = "pointer";
+    li.title = "Aller au produit";
+    li.addEventListener("click", () => {
+      const tr = document.querySelector(`tr[data-row] td[data-sku="${li.dataset.sku}"]`);
+      if (tr) { tr.scrollIntoView({block: "center"}); tr.classList.add("flash"); setTimeout(() => tr.classList.remove("flash"), 1500); }
+    });
+  });
+}
+
+function renderProducts() {
+  const d = DETAIL;
+  $("#prod-count").textContent = "(" + d.products.length + ")";
+  const thead = $("#products-table thead");
+  thead.innerHTML = "<tr><th class='sticky'>sku</th>" +
+    STATE.pr_hdr.filter(h => h !== "sku").map(h => {
+      const m = STATE.refs && STATE.refs.col_meta[h];
+      const label = m ? (m.is_unit ? "unité de " + m.label : m.label) : null;
+      const tip = esc(h) + (m && m.type ? " · type " + m.type : "") + (m && m.group_label ? " · groupe " + m.group_label : "");
+      return `<th class="${h.endsWith("-unit") ? "unit" : ""}" title="${tip}">${esc(h)}${label ? `<span class="collabel">${esc(label)}${m.type ? " · " + esc(m.type) : ""}</span>` : ""}</th>`;
+    }).join("") +
+    "<th>contrôles</th><th></th></tr>";
+  const tbody = $("#products-table tbody");
+  tbody.innerHTML = d.products.map(p => {
+    const warn = p.checks.filter(c => c.severity === "warning").length;
+    const info = p.checks.length - warn;
+    return `<tr data-row="${p.row}" class="${p.checks.length ? "has-issues" : ""}">
+      <td class="sticky" data-sku="${esc(fmt(p.values.sku))}" data-field="sku" title="cliquer pour modifier">${esc(fmt(p.values.sku)) || "—"}</td>
+      ${STATE.pr_hdr.filter(h => h !== "sku").map(h => {
+        const m = STATE.refs && STATE.refs.col_meta[h];
+        const v = fmt(p.values[h]);
+        const optLabel = m && m.options && v ? m.options[v] : null;
+        return `
+        <td class="${h.endsWith("-unit") ? "unit" : ""} ${p.checks.some(c => c.msg.includes(h)) ? "cell-warn" : ""}"
+            data-field="${esc(h)}" title="${esc(optLabel ? optLabel + " — " : "")}cliquer pour modifier">${esc(v) || '<span class="empty-cell">—</span>'}</td>`;
+      }).join("")}
+      <td class="checks-cell">${p.checks.length
+          ? `<details><summary class="${warn ? "issue" : "info"}">⚠${p.checks.length}</summary>
+             <ul>${p.checks.map(c => `<li class="${c.severity}">${esc(c.msg)}</li>`).join("")}</ul></details>`
+          : '<span class="ok-dot">✓</span>'}</td>
+      <td><button class="danger mini" data-del="${p.row}" title="Supprimer le produit">🗑</button></td>
+    </tr>`;
+  }).join("");
+  tbody.querySelectorAll("td[data-field]").forEach(td => {
+    td.addEventListener("click", () => startEdit(td));
+  });
+  tbody.querySelectorAll("button[data-del]").forEach(b => {
+    b.addEventListener("click", async () => {
+      if (!confirm("Supprimer le produit ligne " + b.dataset.del + " ?")) return;
+      await api("/api/produit/row/" + b.dataset.del, {method: "DELETE"});
+      await afterMutation();
+    });
+  });
+  $("#btn-add-product").onclick = async () => {
+    const r = await api("/api/produit", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({parent: currentCode})});
+    await afterMutation();
+    const tr = document.querySelector(`tr[data-row="${r.row}"]`);
+    if (tr) { tr.scrollIntoView({block: "center"}); const td = tr.querySelector("td[data-field='sku']"); if (td) startEdit(td); }
+  };
+}
+
+function startEdit(td) {
+  if (editCell) return;
+  const tr = td.parentElement;
+  const row = tr.dataset.row;
+  const field = td.dataset.field;
+  const old = td.textContent;
+  editCell = td;
+  const isParent = field === "parent";
+  const dlId = isParent ? "dl-parent" : ("dl-pr-" + field);
+  const meta = STATE.refs && STATE.refs.col_meta[field];
+  const longText = !isParent && meta && (meta.type === "textarea" || (meta.type === "text" && old.length > 60));
+  td.classList.add("editing");
+  if (longText) {
+    td.innerHTML = `<textarea rows="5">${esc(old === "—" ? "" : old)}</textarea>`;
+  } else {
+    td.innerHTML = `<input list="${document.getElementById(dlId) ? dlId : ""}" value="${esc(old === "—" ? "" : old)}">`;
+  }
+  const inp = td.querySelector("input, textarea");
+  inp.focus();
+  if (inp.select) inp.select();
+  let done = false;
+  const finish = async (saveIt) => {
+    if (done) return; done = true;
+    const val = inp.value;
+    editCell = null;
+    if (saveIt && val !== (old === "—" ? "" : old)) {
+      try {
+        await api("/api/produit/row/" + row, {method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({field, value: val})});
+        await afterMutation();
+      } catch (e) {
+        alert("Erreur d'enregistrement : " + e.message);
+        renderProducts();
+      }
+    } else {
+      renderProducts();
+    }
+  };
+  inp.addEventListener("blur", () => finish(true));
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !longText) { e.preventDefault(); finish(true); }
+    if (e.key === "Enter" && e.ctrlKey && longText) { e.preventDefault(); finish(true); }
+    if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+}
+
+async function afterMutation() {
+  await loadState();
+  if (currentCode) {
+    DETAIL = await api("/api/pm/" + encodeURIComponent(currentCode));
+    if (!DETAIL.pm_rows.length) currentTabRow = null;
+    else if (!DETAIL.pm_rows.some(r => r.row === currentTabRow)) currentTabRow = DETAIL.pm_rows[0].row;
+    renderList();
+    renderPM();
+  }
+  setStatus("💾 Enregistré à " + new Date().toLocaleTimeString());
+}
+
+function currentIndex() {
+  const list = filteredList();
+  return list.findIndex(p => p.code === currentCode);
+}
+
+function nav(delta) {
+  const list = filteredList();
+  if (!list.length) return;
+  let i = currentIndex();
+  i = (i + delta + list.length) % list.length;
+  openPM(list[i].code);
+}
+
+function navNextIssue() {
+  const list = filteredList();
+  if (!list.length) return;
+  const start = currentIndex();
+  for (let k = 1; k <= list.length; k++) {
+    const p = list[(start + k) % list.length];
+    if (p.nb_issues > 0) { openPM(p.code); return; }
+  }
+  alert("Aucun PM avec anomalie dans la liste courante.");
+}
+
+async function showDashboard() {
+  $("#dashboard").style.display = "flex";
+  $("#dashboard-body").innerHTML = "Chargement…";
+  const groups = await api("/api/checks");
+  const total = groups.reduce((a, g) => a + g.count, 0);
+  $("#dashboard-body").innerHTML = `<p class="dash-total">${total} anomalie(s) détectée(s) dans ${groups.length} catégorie(s). Cliquez sur une ligne pour ouvrir le PM concerné.</p>` +
+    groups.map(g => `<details open class="dash-group">
+      <summary><b>${esc(g.label)}</b> <span class="tag issue">${g.count}</span></summary>
+      <ul>${g.items.map(it => `<li class="${it.severity}"><a href="#" data-pm="${esc(it.pm)}">${esc(it.pm)}</a>${it.sku ? " — " + esc(it.sku) : ""} : ${esc(it.msg)}</li>`).join("")}</ul>
+    </details>`).join("");
+  $("#dashboard-body").querySelectorAll("a[data-pm]").forEach(a => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      $("#dashboard").style.display = "none";
+      openPM(a.dataset.pm);
+    });
+  });
+}
+
+$("#search").addEventListener("input", renderList);
+$("#filter").addEventListener("change", renderList);
+$("#btn-prev").addEventListener("click", () => nav(-1));
+$("#btn-next").addEventListener("click", () => nav(1));
+$("#btn-next-issue").addEventListener("click", navNextIssue);
+$("#btn-dashboard").addEventListener("click", showDashboard);
+$("#btn-close-dashboard").addEventListener("click", () => { $("#dashboard").style.display = "none"; });
+$("#btn-save").addEventListener("click", async () => {
+  const r = await api("/api/save", {method: "POST"});
+  setStatus("💾 Enregistré à " + r.saved_at);
+});
+
+loadState().then(() => {
+  const saved = sessionStorage.getItem("lastPM");
+  if (saved && STATE.pm_list.some(p => p.code === saved)) openPM(saved);
+});
+setInterval(() => { if (currentCode) sessionStorage.setItem("lastPM", currentCode); }, 2000);
+
+// ---------- Assistant IA ----------
+let LAST_PATCH = [];
+
+async function sendAssistant() {
+  const msg = $("#ai-msg").value.trim();
+  if (!msg || !currentCode) return;
+  $("#ai-status").textContent = "Envoi…";
+  try {
+    const r = await api("/api/assistant", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({pm: currentCode, message: msg})});
+    $("#ai-status").textContent = r.mode === "api"
+      ? "Réponse reçue via API (" + (r.model || "LLM") + ")"
+      : (r.note || "mode manuel");
+    if (r.mode === "manuel" && r.prompt) {
+      $("#ai-prompt").value = r.prompt;
+      $("#ai-prompt-wrap").style.display = "block";
+    }
+    LAST_PATCH = r.patch || [];
+    renderAIResponse(r.explication || "", LAST_PATCH);
+  } catch (e) {
+    $("#ai-status").textContent = "Erreur : " + e.message;
+  }
+}
+
+async function previewAnswer() {
+  let obj;
+  try { obj = JSON.parse($("#ai-answer").value); }
+  catch (e) { alert("JSON invalide : " + e.message); return; }
+  const patch = Array.isArray(obj.patch) ? obj.patch : [];
+  const r = await api("/api/assistant/preview", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({patch})});
+  LAST_PATCH = r.patch;
+  $("#ai-prompt-wrap").style.display = "none";
+  renderAIResponse(obj.explication || "", r.patch);
+}
+
+function renderAIResponse(expl, patch) {
+  $("#ai-explication").textContent = expl;
+  $("#ai-patch tbody").innerHTML = patch.map((p, i) => `<tr>
+    <td><input type="checkbox" checked data-i="${i}"></td>
+    <td>${esc(p.sheet)}</td><td>${p.row}</td><td>${esc(p.field)}</td>
+    <td class="old">${esc(fmt(p.old))}</td><td class="new">${esc(fmt(p.value))}</td></tr>`).join("");
+  $("#ai-response").style.display = "block";
+}
+
+async function applyPatch() {
+  const sel = [...document.querySelectorAll("#ai-patch input[type=checkbox]:checked")]
+    .map(c => LAST_PATCH[+c.dataset.i]).filter(Boolean);
+  if (!sel.length) { $("#ai-apply-status").textContent = "Aucune modification cochée."; return; }
+  const r = await api("/api/assistant/apply", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({patch: sel})});
+  $("#ai-apply-status").textContent = r.applied.length + " modification(s) appliquée(s)"
+    + (r.errors.length ? ", " + r.errors.length + " rejetée(s)" : "")
+    + (r.saved_at ? " — 💾 enregistré à " + r.saved_at : "");
+  await afterMutation();
+}
+
+$("#ai-send").addEventListener("click", sendAssistant);
+$("#ai-copy").addEventListener("click", () => { const t = $("#ai-prompt"); t.select(); document.execCommand("copy"); $("#ai-status").textContent = "Prompt copié 📋"; });
+$("#ai-preview").addEventListener("click", previewAnswer);
+$("#ai-apply").addEventListener("click", applyPatch);
+
+// ---------- Nouveau PM ----------
+document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", () => {
+  $("#" + b.dataset.close).style.display = "none";
+}));
+$("#btn-new-pm").addEventListener("click", async () => {
+  $("#modal-newpm").style.display = "flex";
+  $("#np-status").textContent = "";
+  try {
+    const r = await api("/api/codes/next");
+    $("#np-code").value = r.next;
+    $("#np-status").textContent = "prochain code libre : " + r.next + " (" + r.count + " PM existants, max " + r.max + ")";
+  } catch (e) { $("#np-status").textContent = e.message; }
+});
+$("#np-nextcode").addEventListener("click", async () => {
+  const r = await api("/api/codes/next");
+  $("#np-code").value = r.next;
+});
+$("#np-submit").addEventListener("click", async () => {
+  const code = $("#np-code").value.trim();
+  if (!code) { $("#np-status").textContent = "Code obligatoire."; return; }
+  const values = {
+    family_variant: $("#np-fv").value.trim(),
+    categories: $("#np-cat").value.trim(),
+    EUINF0010: $("#np-euinf0010").value.trim(),
+    EUINF0020: $("#np-euinf0020").value.trim(),
+    EUINF0030: $("#np-euinf0030").value.trim(),
+    "EUMKG0030-fr_FR": $("#np-30").value.trim(),
+    "EUMKG0040-fr_FR": $("#np-40").value.trim(),
+    "EUMKG0120-fr_FR": $("#np-120").value.trim(),
+  };
+  if (!values["EUMKG0030-fr_FR"] || !values["EUMKG0120-fr_FR"]) {
+    $("#np-status").textContent = "EUMKG0030-fr_FR et EUMKG0120-fr_FR sont obligatoires.";
+    return;
+  }
+  try {
+    const r = await api("/api/pm", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({code, values})});
+    $("#modal-newpm").style.display = "none";
+    await afterMutation();
+    openPM(code);
+  } catch (e) { $("#np-status").textContent = "Erreur : " + e.message; }
+});
+
+// ---------- Scinder un PM ----------
+let SPLIT = null;
+
+async function openSplit() {
+  if (!currentCode) return;
+  $("#modal-split").style.display = "flex";
+  $("#split-code").textContent = currentCode;
+  $("#split-status").textContent = "chargement…";
+  SPLIT = await api("/api/pm/" + encodeURIComponent(currentCode) + "/split_suggestions");
+  const sel = $("#split-criterion");
+  sel.innerHTML = '<option value="manuel">— manuel (cocher les produits) —</option>' +
+    SPLIT.suggestions.map((sg, i) => `<option value="${i}">${esc(sg.label)} (${Object.keys(sg.groups).length} groupes)</option>`).join("");
+  renderSplitGroups("manuel");
+  $("#split-status").textContent = SPLIT.products.length + " produits, prochain code libre : " + SPLIT.next_codes[0];
+}
+
+function renderSplitGroups(mode) {
+  const wrap = $("#split-groups");
+  wrap.innerHTML = "";
+  const prods = SPLIT.products;
+  const groups = [];
+  if (mode === "manuel") {
+    groups.push({label: "Nouveau PM (sélection manuelle)", rows: prods.map(p => p.row)});
+  } else {
+    const sg = SPLIT.suggestions[+mode];
+    for (const [val, rows] of Object.entries(sg.groups)) {
+      groups.push({label: sg.label + " = " + val, rows});
+    }
+  }
+  groups.forEach((g, gi) => {
+    const code = SPLIT.next_codes[gi] || "";
+    const srcName = DETAIL.pm_rows.length ? (DETAIL.pm_rows[0].values["EUMKG0030-fr_FR"] || currentCode) : currentCode;
+    const div = document.createElement("div");
+    div.className = "split-group";
+    div.innerHTML = `<h4>Groupe ${gi + 1} : ${esc(g.label)}</h4>
+      <div class="grid">
+        <div class="field"><label>nouveau code PM</label><input class="sg-code" value="${esc(code)}"></div>
+        <div class="field"><label>nom modèle EUMKG0120 (oblig.)</label><input class="sg-120" value="${esc(srcName).slice(0, 40).toUpperCase()}"></div>
+        <div class="field wide"><label>desc. courte EUMKG0030 (oblig.)</label><input class="sg-30" value="${esc(srcName + " - " + g.label)}"></div>
+        <div class="field wide"><label>desc. longue EUMKG0040</label><input class="sg-40" value="${esc(srcName)}"></div>
+      </div>
+      <ul>${g.rows.map(r => {
+        const p = prods.find(x => x.row === r);
+        return `<li><label><input type="checkbox" class="sg-row" data-row="${r}" checked> ${esc(p ? p.sku : r)} — ${esc(p ? (p.name || "") : "")}</label></li>`;
+      }).join("")}</ul>`;
+    wrap.appendChild(div);
+  });
+}
+
+$("#split-criterion").addEventListener("change", (e) => renderSplitGroups(e.target.value));
+
+$("#split-ai").addEventListener("click", async () => {
+  $("#split-status").textContent = "L'IA analyse le PM et propose un scindage…";
+  try {
+    const r = await api("/api/assistant", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({pm: currentCode, message:
+        "Analyse ce PM et propose un scindage intelligent en nouveaux PM si pertinent (sinon dis-le). " +
+        "Pour chaque nouveau PM : op create_pm avec un code NSPLD libre (supérieur au max existant) et values " +
+        "obligatoires remplies (family_variant, categories, EUMKG0030-fr_FR, EUMKG0040-fr_FR, EUMKG0120-fr_FR), " +
+        "puis déplace les produits concernés (sheet produits, field parent). " +
+        "Explique chaque groupe dans 'explication'."})});
+    if (r.mode === "manuel") {
+      $("#ai-prompt").value = r.prompt; $("#ai-prompt-wrap").style.display = "block";
+      $("#assistant-panel").style.display = "block";
+      $("#ai-status").textContent = "Mode manuel : copiez le prompt, collez la réponse JSON dans l'assistant.";
+      $("#split-status").textContent = "Passez par le panneau Assistant IA (ouvert) pour récupérer la suggestion.";
+      return;
+    }
+    const creates = (r.patch || []).filter(p => p.op === "create_pm");
+    if (!creates.length) { $("#split-status").textContent = "L'IA ne propose pas de scindage. " + (r.explication || ""); return; }
+    // pré-remplit les groupes du dialogue avec la suggestion IA
+    const wrap = $("#split-groups");
+    wrap.innerHTML = "";
+    creates.forEach((c, gi) => {
+      const vals = c.values || {};
+      const rows = (r.patch || []).filter(p => p.sheet === "produits" && p.field === "parent" && p.value === c.code)
+        .map(p => p.row);
+      const div = document.createElement("div");
+      div.className = "split-group";
+      div.innerHTML = `<h4>Suggestion IA ${gi + 1} (code ${esc(c.code)})</h4>
+        <div class="grid">
+          <div class="field"><label>nouveau code PM</label><input class="sg-code" value="${esc(c.code)}"></div>
+          <div class="field"><label>nom modèle EUMKG0120 (oblig.)</label><input class="sg-120" value="${esc(vals["EUMKG0120-fr_FR"] || "")}"></div>
+          <div class="field wide"><label>desc. courte EUMKG0030 (oblig.)</label><input class="sg-30" value="${esc(vals["EUMKG0030-fr_FR"] || "")}"></div>
+          <div class="field wide"><label>desc. longue EUMKG0040</label><input class="sg-40" value="${esc(vals["EUMKG0040-fr_FR"] || "")}"></div>
+          <div class="field"><label>family_variant</label><input class="sg-fv" value="${esc(vals.family_variant || SPLIT.family_variant || "")}"></div>
+          <div class="field"><label>categories</label><input class="sg-cat" value="${esc(vals.categories || "")}"></div>
+        </div>
+        <ul>${rows.map(rr => {
+          const p = SPLIT.products.find(x => x.row === rr);
+          return `<li><label><input type="checkbox" class="sg-row" data-row="${rr}" checked> ${esc(p ? p.sku : rr)} — ${esc(p ? (p.name || "") : "")}</label></li>`;
+        }).join("")}</ul>`;
+      wrap.appendChild(div);
+    });
+    $("#split-status").textContent = "Suggestion IA : " + creates.length + " nouveau(x) PM. " + (r.explication || "").slice(0, 200);
+  } catch (e) { $("#split-status").textContent = "Erreur IA : " + e.message; }
+});
+
+$("#split-apply").addEventListener("click", async () => {
+  const groups = [...document.querySelectorAll(".split-group")].map(div => {
+    const rows = [...div.querySelectorAll(".sg-row:checked")].map(c => +c.dataset.row);
+    return {
+      new_code: div.querySelector(".sg-code").value.trim(),
+      rows,
+      values: {
+        family_variant: (div.querySelector(".sg-fv") || {}).value !== undefined ? div.querySelector(".sg-fv").value.trim() : SPLIT.family_variant,
+        categories: (div.querySelector(".sg-cat") || {}).value !== undefined ? div.querySelector(".sg-cat").value.trim() : (DETAIL.pm_rows[0] ? DETAIL.pm_rows[0].values.categories : ""),
+        "EUMKG0030-fr_FR": div.querySelector(".sg-30").value.trim(),
+        "EUMKG0040-fr_FR": div.querySelector(".sg-40").value.trim(),
+        "EUMKG0120-fr_FR": div.querySelector(".sg-120").value.trim(),
+      },
+    };
+  }).filter(g => g.new_code && g.rows.length);
+  if (!groups.length) { $("#split-status").textContent = "Aucun groupe avec code + produits cochés."; return; }
+  try {
+    const r = await api("/api/pm/" + encodeURIComponent(currentCode) + "/split", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({groups})});
+    $("#split-status").textContent = r.created.length + " PM créé(s)" +
+      (r.errors.length ? ", erreurs: " + JSON.stringify(r.errors) : "") +
+      (r.saved_at ? " — 💾 " + r.saved_at : "");
+    $("#modal-split").style.display = "none";
+    await afterMutation();
+  } catch (e) { $("#split-status").textContent = "Erreur : " + e.message; }
+});
